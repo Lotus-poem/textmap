@@ -1,5 +1,6 @@
 # 秘密鍵
 myapp2/keys.py
+myapp/keys.py
 
 # Python
 __pycache__/
