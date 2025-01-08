@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>処理結果</h1>
+
+    {% if processed_data %}
+        <div class="card mb-4">
+            <div class="card-header">
+                マッピング結果
+            </div>
+            <div class="card-body">
+                <table class="table table-bordered">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 30%">カテゴリー</th>
+                            <th style="width: 70%">内容</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for key, value in processed_data.items %}
+                        <tr>
+                            <td><strong>{{ key }}</strong></td>
+                            <td>{{ value|linebreaks }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                元のテキスト
+            </div>
+            <div class="card-body">
+                <p style="white-space: pre-wrap;">{{ original_text }}</p>
+            </div>
+        </div>
+    {% else %}
+        <div class="alert alert-warning">
+            処理結果が見つかりません。
+        </div>
+    {% endif %}
+
+    <div class="mt-4">
+        <a href="{% url 'text-process' %}" class="btn btn-primary">新しいテキストを処理</a>
+    </div>
+</div>
+{% endblock %} 

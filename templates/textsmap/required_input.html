@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="text-center mb-0">必須情報の入力</h2>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info">
+                        以下の必須情報が見つかりませんでした。入力してください。
+                    </div>
+                    
+                    <h5 class="mb-3">既存の情報:</h5>
+                    <ul class="list-group mb-4">
+                        {% for key, value in existing_data.items %}
+                            <li class="list-group-item">
+                                <strong>{{ key }}:</strong> {{ value }}
+                            </li>
+                        {% endfor %}
+                    </ul>
+
+                    <form method="post">
+                        {% csrf_token %}
+                        {% for field in form %}
+                            <div class="mb-3">
+                                {{ field.label_tag }}
+                                {{ field }}
+                                {% if field.errors %}
+                                    {% for error in field.errors %}
+                                        <div class="invalid-feedback d-block">
+                                            {{ error }}
+                                        </div>
+                                    {% endfor %}
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                        <div class="text-center">
+                            <button type="submit" class="btn btn-primary">保存</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 
