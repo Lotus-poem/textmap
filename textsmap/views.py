@@ -1,7 +1,7 @@
 from django.shortcuts import render, redirect
-from django.views.generic import ListView, DetailView, CreateView, FormView, TemplateView
-from .models import MappedText, Category, ProcessedText
-from .forms import TextProcessForm, CategoryAdjustmentForm
+from django.views.generic import CreateView, FormView, TemplateView
+from .models import MappedText, ProcessedText
+from .forms import TextProcessForm
 from django.contrib import messages
 from openai import OpenAI
 from .config import (
@@ -20,18 +20,9 @@ from django.views import View
 import logging
 import traceback
 from django.http import JsonResponse
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-class MappedTextListView(ListView):
-    model = MappedText
-    template_name = 'textmap/mappedtext_list.html'
-    context_object_name = 'texts'
-
-class MappedTextDetailView(DetailView):
-    model = MappedText
-    template_name = 'textmap/mappedtext_detail.html'
-    context_object_name = 'text'
 
 class TextProcessView(CreateView):
     model = MappedText
@@ -44,159 +35,110 @@ class TextProcessView(CreateView):
         categories = get_current_categories()
         return [cat for cat in categories if cat not in ['id', 'timestamp']]
     
+    def process_with_gpt4(self, text, categories):
+        """GPT-4による解析を行う"""
+        try:
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "あなたは候補者情報を構造化するアシスタントです。"
+                            "提供された文章から、既存のカテゴリーに該当する情報を全て抽出し、"
+                            "新しい重要な情報カテゴリーがあれば提案してください。"
+                            "必ず指定されたJSON形式で返してください。"
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""
+                        次の文章から情報を抽出し、以下の形式のJSONで返してください：
+                        {{
+                            "existing_data": {{
+                                "氏名": "値",
+                                "会社名": "値",
+                                ...他の必須カテゴリー
+                            }},
+                            "new_categories": {{
+                                "新カテゴリー名": "値"
+                            }}
+                        }}
+
+                        必須カテゴリー（情報がない場合は「情報なし」と記載）:
+                        {categories}
+                        
+                        文章:
+                        {text}
+                        """
+                    }
+                ],
+                temperature=0.2,
+                max_tokens=2000
+            )
+            
+            return {
+                'content': response.choices[0].message.content.strip(),
+                'usage': response.usage
+            }
+            
+        except Exception as e:
+            print(f"\nGPT Processing Error: {str(e)}")
+            raise
+    
+    def calculate_cost(self, usage):
+        """トークン使用量からコストを計算"""
+        return {
+            'prompt_tokens': usage.prompt_tokens,
+            'completion_tokens': usage.completion_tokens,
+            'total_tokens': usage.total_tokens,
+            'cost_usd': (
+                (usage.prompt_tokens * GPT4_PROMPT_COST) +
+                (usage.completion_tokens * GPT4_COMPLETION_COST)
+            ) / 1000
+        }
+    
     def form_valid(self, form):
+        """フォームのバリデーション成功時の処理"""
         try:
             instance = form.save(commit=False)
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
             
-            # 現在の有効なカテゴリーを取得
+            # 現在のカテゴリーを取得
             current_categories = self.get_current_categories()
-            print("\n=== Processing New Text ===")
+            print(f"\n=== Processing New Text ===")
             print(f"Text length: {len(instance.input_text)}")
             
-            try:
-                print("\nSending request to GPT-4...")
-                response = client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "あなたは候補者情報を構造化するアシスタントです。"
-                                "提供された文章から、既存のカテゴリーに該当する情報を全て抽出し、"
-                                "新しい重要な情報カテゴリーがあれば提案してください。"
-                                "必ず指定されたJSON形式で返してください。"
-                            )
-                        },
-                        {
-                            "role": "user",
-                            "content": f"""
-                            次の文章から情報を抽出し、以下の形式のJSONで返してください：
-                            {{
-                                "existing_data": {{
-                                    "氏名": "値",
-                                    "会社名": "値",
-                                    ...他の必須カテゴリー
-                                }},
-                                "new_categories": {{
-                                    "新カテゴリー名": "値"
-                                }}
-                            }}
-
-                            必須カテゴリー（情報がない場合は「情報なし」と記載）:
-                            {current_categories}
-                            
-                            文章:
-                            {instance.input_text}
-                            """
-                        }
-                    ],
-                    temperature=0.2,
-                    max_tokens=2000
-                )
-
-                content = response.choices[0].message.content.strip()
-                print("\nGPT Response:", content)
-                
-                try:
-                    result = json.loads(content)
-                    print("\nParsed JSON:", json.dumps(result, indent=2, ensure_ascii=False))
-                    
-                    # セッションにデータを保存
-                    session_data = {
-                        'input_text': instance.input_text,
-                        'existing_data': result['existing_data'],
-                        'new_categories': result['new_categories'],
-                        'tokens_info': {
-                            'prompt_tokens': response.usage.prompt_tokens,
-                            'completion_tokens': response.usage.completion_tokens,
-                            'total_tokens': response.usage.total_tokens,
-                            'cost_usd': (
-                                (response.usage.prompt_tokens * GPT4_PROMPT_COST) +
-                                (response.usage.completion_tokens * GPT4_COMPLETION_COST)
-                            ) / 1000
-                        }
-                    }
-                    
-                    self.request.session['temp_form_data'] = session_data
-                    self.request.session.modified = True
-                    
-                    # 常に氏名確認画面に遷移
-                    print("Redirecting to confirm-name")
-                    return redirect('confirm-name')
-                    
-                except json.JSONDecodeError as e:
-                    print(f"\nJSON Parse Error: {str(e)}")
-                    return self.form_invalid(form)
-                    
-            except Exception as e:
-                print("\nGeneral Error:", str(e))
-                messages.error(self.request, f"エラーが発生しました: {str(e)}")
-                return redirect('process-text')
-        except Exception as e:
-            print(f"\nError in form_valid: {str(e)}")
+            # GPT-4による解析
+            gpt_response = self.process_with_gpt4(instance.input_text, current_categories)
+            
+            # JSONパース
+            result = json.loads(gpt_response['content'])
+            print("\nParsed JSON:", json.dumps(result, indent=2, ensure_ascii=False))
+            
+            # セッションデータの保存
+            session_data = {
+                'input_text': instance.input_text,
+                'existing_data': result['existing_data'],
+                'new_categories': result.get('new_categories', {}),
+                'tokens_info': self.calculate_cost(gpt_response['usage'])
+            }
+            
+            self.request.session['temp_form_data'] = session_data
+            self.request.session.modified = True
+            
+            print("Redirecting to confirm-name")
+            return redirect('confirm-name')
+            
+        except json.JSONDecodeError as e:
+            print(f"\nJSON Parse Error: {str(e)}")
+            form.add_error(None, 'GPTからの応答を解析できませんでした。')
             return self.form_invalid(form)
-
-    def process_text_with_gpt(self, text, categories):
-        client = OpenAI()
-        
-        # プロンプトの構築
-        prompt = f"""
-        以下のテキストから、各カテゴリーに関連する情報を抽出してください。
-        テキストに該当する情報がない場合は「情報なし」と記入してください。
-
-        カテゴリー:
-        {', '.join(categories)}
-
-        テキスト:
-        {text}
-
-        回答は以下のJSON形式で返してください:
-        {{
-            "カテゴリー1": "抽出された情報1",
-            "カテゴリー2": "抽出された情報2",
-            ...
-        }}
-        """
-
-        # GPTに問い合わせ（GPT-4を使用）
-        response = client.chat.completions.create(
-            model="gpt-4",  # GPT-3.5からGPT-4に変更
-            messages=[
-                {"role": "system", "content": "あなたは与えられたテキストから情報を抽出する専門家です。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
-        )
-
-class ConfirmNewKeysView(CreateView):
-    template_name = 'textmap/confirm_new_keys.html'
-    
-    def get(self, request, *args, **kwargs):
-        temp_response = request.session.get('temp_response', {})
-        suggested_keys = temp_response.get('suggested_new_keys', [])
-        return render(request, self.template_name, {
-            'suggested_keys': suggested_keys,
-        })
-    
-    def post(self, request, *args, **kwargs):
-        selected_keys = request.POST.getlist('selected_keys')
-        current_keys = request.session.get('current_keys', INITIAL_KEYS.copy())
-        current_keys.extend(selected_keys)
-        request.session['current_keys'] = current_keys
-        
-        instance = MappedText(input_text=request.session['temp_form_data'])
-        instance.save()
-        
-        del request.session['temp_form_data']
-        del request.session['temp_response']
-        
-        return redirect('process-text')
-
-class TextDetailView(DetailView):
-    model = MappedText
-    template_name = 'textmap/mappedtext_detail.html'
-    context_object_name = 'text'
+            
+        except Exception as e:
+            print(f"\nGeneral Error: {str(e)}")
+            form.add_error(None, f'エラーが発生しました：{str(e)}')
+            return self.form_invalid(form)
 
 class CategoryAdjustForm(forms.Form):
     def __init__(self, *args, new_categories=None, existing_categories=None, **kwargs):
@@ -300,46 +242,107 @@ class CategoryAdjustView(FormView):
             return self.form_invalid(form)
 
 class ResultView(View):
-    def get(self, request):
-        # セッションから対象レコードのIDを取得
-        target_record_id = request.session.get('target_record_id')
-        temp_data = request.session.get('temp_form_data', {})
-        name = temp_data.get('existing_data', {}).get('氏名', '')
-        
-        print(f"\n=== ResultView ===")
-        print(f"Target record ID: {target_record_id}")
-        print(f"Name: {name}")
-        
-        df = pd.read_csv('output/mapping_result.csv')
-        
-        if target_record_id:
-            # 更新したレコードを取得
-            target_record = df[df['id'] == target_record_id]
-            record = target_record.iloc[0]
-            print(f"Found updated record: {record.to_dict()}")
-        else:
-            # 新規追加の場合は名前で最新のレコードを取得
-            matching_records = df[df['氏名'] == name]
-            record = matching_records.sort_values('timestamp', ascending=False).iloc[0]
-            print("Using latest record (new entry)")
-        
-        # 処理結果をコンテキストに設定
-        context = {
+    template_name = 'textmap/result.html'
+
+    def get_processed_data(self):
+        """セッションからデータを取得"""
+        temp_data = self.request.session.get('temp_form_data', {})
+        target_id = self.request.session.get('target_record_id')
+
+        print(f"\n=== ResultView: データ取得 ===")
+        print(f"Target ID: {target_id}")
+
+        if target_id:  # 更新の場合
+            try:
+                df = pd.read_csv('output/mapping_result.csv')
+                record = df[df['id'] == target_id].iloc[0].to_dict()
+                print(f"更新レコードを表示:")
+                print(f"- ID: {target_id}")
+                print(f"- 名前: {record.get('氏名', '')}")
+                return {
+                    'original_text': temp_data.get('input_text', ''),
+                    'processed_data': record,
+                    'tokens_info': temp_data.get('tokens_info', {}),
+                    'is_update': True
+                }
+            except Exception as e:
+                print(f"更新レコードの取得エラー: {str(e)}")
+                messages.error(self.request, f'更新レコードの取得に失敗しました: {str(e)}')
+
+        # 新規追加の場合
+        print("新規レコードを表示")
+        return {
             'original_text': temp_data.get('input_text', ''),
-            'processed_data': {
-                col: val for col, val in record.items()
-                if col not in ['id', 'timestamp'] and pd.notna(val) and val != '情報なし'
-            },
-            'tokens_info': temp_data.get('tokens_info', {})
+            'processed_data': temp_data.get('existing_data', {}),
+            'tokens_info': temp_data.get('tokens_info', {}),
+            'is_update': False
         }
-        
-        # セッションのクリーンアップ
-        request.session.pop('target_record_id', None)
-        request.session.pop('update_mode', None)
-        request.session.modified = True
-        
-        # テンプレートパスを修正
-        return render(request, 'textmap/result.html', context)  # textmapに統一
+
+    def update_csv(self, data):
+        """CSVファイルを更新"""
+        try:
+            df = pd.read_csv('output/mapping_result.csv')
+            target_id = self.request.session.get('target_record_id')
+            
+            print(f"\n=== CSV更新 ===")
+            if target_id:  # 既存レコードの更新
+                print(f"レコードを更新: ID {target_id}")
+                # データの整形
+                update_data = {}
+                for column in df.columns:
+                    update_data[column] = data.get(column, '')
+                
+                # インデックスを使用して更新
+                idx = df.index[df['id'] == target_id].tolist()[0]
+                for col in df.columns:
+                    df.at[idx, col] = update_data[col]
+            else:  # 新規レコードの追加
+                data['id'] = len(df) + 1
+                data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"新規レコードを追加: ID {data['id']}")
+                df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
+            
+            df.to_csv('output/mapping_result.csv', index=False)
+            return True, None
+            
+        except Exception as e:
+            print(f"CSV更新エラー: {str(e)}")
+            return False, str(e)
+
+    def get(self, request, *args, **kwargs):
+        """結果表示"""
+        context = self.get_processed_data()
+        return render(request, self.template_name, context)
+
+    def post(self, request, *args, **kwargs):
+        """編集内容を保存"""
+        try:
+            # POSTデータから編集内容を取得
+            edited_data = {}
+            for key, value in request.POST.items():
+                if key not in ['csrfmiddlewaretoken']:
+                    edited_data[key] = value.strip()
+
+            # CSVファイルを更新
+            success, error = self.update_csv(edited_data)
+            
+            if success:
+                messages.success(request, '変更を保存しました。')
+                # セッションデータをクリア
+                if 'temp_form_data' in request.session:
+                    del request.session['temp_form_data']
+                if 'target_record_id' in request.session:
+                    del request.session['target_record_id']
+                return redirect('text-process')
+            else:
+                messages.error(request, f'保存中にエラーが発生しました: {error}')
+                context = self.get_processed_data()
+                return render(request, self.template_name, context)
+
+        except Exception as e:
+            messages.error(request, f'予期せぬエラーが発生しました: {str(e)}')
+            context = self.get_processed_data()
+            return render(request, self.template_name, context)
 
 class NameConfirmView(TemplateView):
     template_name = 'textmap/confirm_name.html'

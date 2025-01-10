@@ -1,50 +1,55 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container mt-4">
-    <h1>処理結果</h1>
+<div class="container mt-5">
+    <div class="card">
+        <div class="card-header">
+            <h2 class="text-center">処理結果</h2>
+        </div>
+        <div class="card-body">
+            <form method="post">
+                {% csrf_token %}
+                
+                <!-- 元のテキスト（読み取り専用） -->
+                <div class="mb-4">
+                    <label class="form-label"><strong>元のテキスト:</strong></label>
+                    <textarea class="form-control" readonly rows="3">{{ original_text }}</textarea>
+                </div>
 
-    {% if processed_data %}
-        <div class="card mb-4">
-            <div class="card-header">
-                マッピング結果
-            </div>
-            <div class="card-body">
-                <table class="table table-bordered">
-                    <thead class="table-light">
-                        <tr>
-                            <th style="width: 30%">カテゴリー</th>
-                            <th style="width: 70%">内容</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for key, value in processed_data.items %}
-                        <tr>
-                            <td><strong>{{ key }}</strong></td>
-                            <td>{{ value|linebreaks }}</td>
-                        </tr>
+                <!-- 編集可能なデータフィールド -->
+                <div class="row">
+                    {% for key, value in processed_data.items %}
+                    <div class="col-md-6 mb-3">
+                        <div class="form-group">
+                            <label for="edit-{{ key }}" class="form-label">{{ key }}:</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="edit-{{ key }}"
+                                   name="{{ key }}"
+                                   value="{{ value }}"
+                                   {% if key == 'id' or key == 'timestamp' %}readonly{% endif %}>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- トークン情報（読み取り専用） -->
+                <div class="mt-4">
+                    <h5>トークン使用量:</h5>
+                    <ul class="list-unstyled">
+                        {% for key, value in tokens_info.items %}
+                        <li><strong>{{ key }}:</strong> {{ value }}</li>
                         {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+                    </ul>
+                </div>
 
-        <div class="card mb-4">
-            <div class="card-header">
-                元のテキスト
-            </div>
-            <div class="card-body">
-                <p style="white-space: pre-wrap;">{{ original_text }}</p>
-            </div>
+                <!-- 保存ボタン -->
+                <div class="text-center mt-4">
+                    <button type="submit" class="btn btn-primary">変更を保存</button>
+                    <a href="{% url 'text-process' %}" class="btn btn-secondary ms-2">新規分析へ</a>
+                </div>
+            </form>
         </div>
-    {% else %}
-        <div class="alert alert-warning">
-            処理結果が見つかりません。
-        </div>
-    {% endif %}
-
-    <div class="mt-4">
-        <a href="{% url 'text-process' %}" class="btn btn-primary">新しいテキストを処理</a>
     </div>
 </div>
 {% endblock %} 
