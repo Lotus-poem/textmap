@@ -25,18 +25,18 @@ logger = logging.getLogger(__name__)
 
 class MappedTextListView(ListView):
     model = MappedText
-    template_name = 'textsmap/mappedtext_list.html'
+    template_name = 'textmap/mappedtext_list.html'
     context_object_name = 'texts'
 
 class MappedTextDetailView(DetailView):
     model = MappedText
-    template_name = 'textsmap/mappedtext_detail.html'
+    template_name = 'textmap/mappedtext_detail.html'
     context_object_name = 'text'
 
 class TextProcessView(CreateView):
     model = MappedText
     form_class = TextProcessForm
-    template_name = 'textsmap/process_text.html'
+    template_name = 'textmap/process_text.html'
     
     def get_current_categories(self):
         """現在のカテゴリーリストを取得"""
@@ -170,7 +170,7 @@ class TextProcessView(CreateView):
         )
 
 class ConfirmNewKeysView(CreateView):
-    template_name = 'textsmap/confirm_new_keys.html'
+    template_name = 'textmap/confirm_new_keys.html'
     
     def get(self, request, *args, **kwargs):
         temp_response = request.session.get('temp_response', {})
@@ -195,7 +195,7 @@ class ConfirmNewKeysView(CreateView):
 
 class TextDetailView(DetailView):
     model = MappedText
-    template_name = 'textsmap/mappedtext_detail.html'
+    template_name = 'textmap/mappedtext_detail.html'
     context_object_name = 'text'
 
 class CategoryAdjustForm(forms.Form):
@@ -225,7 +225,7 @@ class CategoryAdjustForm(forms.Form):
                 )
 
 class CategoryAdjustView(FormView):
-    template_name = 'textsmap/adjust_categories.html'
+    template_name = 'textmap/adjust_categories.html'
     form_class = CategoryAdjustForm
     success_url = '/result/'
 
@@ -339,7 +339,7 @@ class ResultView(View):
         request.session.modified = True
         
         # テンプレートパスを修正
-        return render(request, 'textsmap/result.html', context)  # textsmap/に変更
+        return render(request, 'textmap/result.html', context)  # textmapに統一
 
 class NameConfirmView(TemplateView):
     template_name = 'textmap/confirm_name.html'
