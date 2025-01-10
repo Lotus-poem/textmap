@@ -18,6 +18,8 @@ import pandas as pd
 from django import forms
 from django.views import View
 import logging
+import traceback
+from django.http import JsonResponse
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +52,7 @@ class TextProcessView(CreateView):
             # 現在の有効なカテゴリーを取得
             current_categories = self.get_current_categories()
             print("\n=== Processing New Text ===")
-            print("Text length:", len(instance.input_text))
-            print("Current categories:", current_categories)
+            print(f"Text length: {len(instance.input_text)}")
             
             try:
                 print("\nSending request to GPT-4...")
@@ -101,59 +102,39 @@ class TextProcessView(CreateView):
                     result = json.loads(content)
                     print("\nParsed JSON:", json.dumps(result, indent=2, ensure_ascii=False))
                     
-                    if result.get('new_categories'):
-                        print("\nNew categories found:", result['new_categories'])
-                        session_data = {
-                            'input_text': instance.input_text,
-                            'existing_data': result['existing_data'],
-                            'new_categories': result['new_categories'],
-                            'tokens_info': {
-                                'prompt_tokens': response.usage.prompt_tokens,
-                                'completion_tokens': response.usage.completion_tokens,
-                                'total_tokens': response.usage.total_tokens,
-                                'cost_usd': (
-                                    (response.usage.prompt_tokens * GPT4_PROMPT_COST) +
-                                    (response.usage.completion_tokens * GPT4_COMPLETION_COST)
-                                ) / 1000
-                            }
+                    # セッションにデータを保存
+                    session_data = {
+                        'input_text': instance.input_text,
+                        'existing_data': result['existing_data'],
+                        'new_categories': result['new_categories'],
+                        'tokens_info': {
+                            'prompt_tokens': response.usage.prompt_tokens,
+                            'completion_tokens': response.usage.completion_tokens,
+                            'total_tokens': response.usage.total_tokens,
+                            'cost_usd': (
+                                (response.usage.prompt_tokens * GPT4_PROMPT_COST) +
+                                (response.usage.completion_tokens * GPT4_COMPLETION_COST)
+                            ) / 1000
                         }
-                        print("\nSaving to session:", json.dumps(session_data, indent=2, ensure_ascii=False))
-                        self.request.session['temp_form_data'] = session_data
-                        self.request.session.modified = True
-                        return redirect('adjust-categories')
+                    }
                     
-                    print("\nNo new categories found, saving directly")
-                    # ProcessedTextモデルに保存
-                    processed_text = ProcessedText.objects.create(
-                        original_text=instance.input_text,
-                        processed_data=result['existing_data'],
-                        prompt_tokens=response.usage.prompt_tokens,
-                        completion_tokens=response.usage.completion_tokens,
-                        total_tokens=response.usage.total_tokens,
-                        cost_usd=(
-                            (response.usage.prompt_tokens * GPT4_PROMPT_COST) +
-                            (response.usage.completion_tokens * GPT4_COMPLETION_COST)
-                        ) / 1000
-                    )
-
-                    # CSVファイルに保存
-                    save_mapping_result(result['existing_data'])
-
-                    # 結果画面にリダイレクト
-                    return redirect('result')  # text-processからresultに変更
+                    self.request.session['temp_form_data'] = session_data
+                    self.request.session.modified = True
+                    
+                    # 常に氏名確認画面に遷移
+                    print("Redirecting to confirm-name")
+                    return redirect('confirm-name')
                     
                 except json.JSONDecodeError as e:
-                    print("\nJSON Parse Error:", str(e))
-                    print("Raw content:", content)
-                    messages.error(self.request, f"GPTの応答をJSONとして解析できませんでした: {str(e)}")
-                    return redirect('process-text')
+                    print(f"\nJSON Parse Error: {str(e)}")
+                    return self.form_invalid(form)
                     
             except Exception as e:
                 print("\nGeneral Error:", str(e))
                 messages.error(self.request, f"エラーが発生しました: {str(e)}")
                 return redirect('process-text')
         except Exception as e:
-            messages.error(self.request, f'エラーが発生しました: {str(e)}')
+            print(f"\nError in form_valid: {str(e)}")
             return self.form_invalid(form)
 
     def process_text_with_gpt(self, text, categories):
@@ -320,22 +301,285 @@ class CategoryAdjustView(FormView):
 
 class ResultView(View):
     def get(self, request):
-        # 最新の処理結果を取得
-        latest_result = ProcessedText.objects.order_by('-created_at').first()
+        # セッションから対象レコードのIDを取得
+        target_record_id = request.session.get('target_record_id')
+        temp_data = request.session.get('temp_form_data', {})
+        name = temp_data.get('existing_data', {}).get('氏名', '')
         
-        if not latest_result:
-            messages.error(request, 'テキスト処理の結果が見つかりません。')
-            return redirect('text-process')
-
+        print(f"\n=== ResultView ===")
+        print(f"Target record ID: {target_record_id}")
+        print(f"Name: {name}")
+        
+        df = pd.read_csv('output/mapping_result.csv')
+        
+        if target_record_id:
+            # 更新したレコードを取得
+            target_record = df[df['id'] == target_record_id]
+            record = target_record.iloc[0]
+            print(f"Found updated record: {record.to_dict()}")
+        else:
+            # 新規追加の場合は名前で最新のレコードを取得
+            matching_records = df[df['氏名'] == name]
+            record = matching_records.sort_values('timestamp', ascending=False).iloc[0]
+            print("Using latest record (new entry)")
+        
+        # 処理結果をコンテキストに設定
         context = {
-            'original_text': latest_result.original_text,
-            'processed_data': latest_result.processed_data,
-            'tokens_info': {
-                'prompt_tokens': latest_result.prompt_tokens,
-                'completion_tokens': latest_result.completion_tokens,
-                'total_tokens': latest_result.total_tokens,
-                'cost_usd': latest_result.cost_usd
-            }
+            'original_text': temp_data.get('input_text', ''),
+            'processed_data': {
+                col: val for col, val in record.items()
+                if col not in ['id', 'timestamp'] and pd.notna(val) and val != '情報なし'
+            },
+            'tokens_info': temp_data.get('tokens_info', {})
         }
         
-        return render(request, 'textsmap/result.html', context)
+        # セッションのクリーンアップ
+        request.session.pop('target_record_id', None)
+        request.session.pop('update_mode', None)
+        request.session.modified = True
+        
+        # テンプレートパスを修正
+        return render(request, 'textsmap/result.html', context)  # textsmap/に変更
+
+class NameConfirmView(TemplateView):
+    template_name = 'textmap/confirm_name.html'
+
+    def get(self, request, *args, **kwargs):
+        temp_data = request.session.get('temp_form_data', {})
+        existing_data = temp_data.get('existing_data', {})
+        
+        context = self.get_context_data(**kwargs)
+        context.update({
+            'original_text': temp_data.get('input_text', ''),
+            'extracted_name': existing_data.get('氏名', '')
+        })
+        return self.render_to_response(context)
+
+    def post(self, request, *args, **kwargs):
+        confirmed_name = request.POST.get('confirmed_name', '').strip()
+        temp_data = request.session.get('temp_form_data', {})
+        temp_data['existing_data']['氏名'] = confirmed_name
+        request.session['temp_form_data'] = temp_data
+        request.session.modified = True
+        
+        print(f"\n=== 名前の重複チェック ===")
+        print(f"検索する名前: '{confirmed_name}'")
+
+        try:
+            df = pd.read_csv('output/mapping_result.csv')
+            print(f"CSVファイルの行数: {len(df)}")
+            
+            # 名前の列を正規化（空白を除去）
+            df['氏名'] = df['氏名'].str.strip()
+            
+            # 重複チェック（IDの降順でソート）
+            matching_records = df[df['氏名'] == confirmed_name].sort_values('id', ascending=False)
+            print(f"一致するレコード数: {len(matching_records)}")
+            
+            if not matching_records.empty:
+                # 最新（最大ID）のレコードを使用
+                latest_record = matching_records.iloc[0]
+                record_id = latest_record['id']
+                
+                print(f"最新レコードのID: {record_id}")
+                print(f"一致するレコード:")
+                print(matching_records[['id', '氏名', 'timestamp']].to_string())
+                
+                # 重複データをセッションに保存
+                request.session['existing_record'] = latest_record.to_dict()
+                request.session['target_record_id'] = int(record_id)
+                request.session.modified = True
+                
+                print("check-duplicateにリダイレクト")
+                return redirect('check-duplicate')
+            
+            print("重複なし - adjust-categoriesに進みます")
+            return redirect('adjust-categories')
+            
+        except Exception as e:
+            print(f"エラーが発生しました: {str(e)}")
+            return redirect('adjust-categories')
+
+class DuplicateCheckView(TemplateView):
+    template_name = 'textmap/check_duplicate.html'
+
+    def get(self, request, *args, **kwargs):
+        print("DuplicateCheckView.get called")
+        
+        temp_data = request.session.get('temp_form_data', {})
+        existing_data = temp_data.get('existing_data', {})
+        name = existing_data.get('氏名', '')
+        
+        print(f"Looking for name: {name}")
+        
+        context = self.get_context_data(**kwargs)
+        
+        try:
+            df = pd.read_csv('output/mapping_result.csv')
+            
+            # 名前が一致する全レコードを取得（タイムスタンプ降順）
+            matching_records = df[df['氏名'] == name].sort_values('timestamp', ascending=False)
+            
+            if not matching_records.empty:
+                # 各レコードの情報を整形
+                records = []
+                for _, record in matching_records.iterrows():
+                    records.append({
+                        'id': int(record['id']),
+                        'timestamp': record['timestamp'],
+                        'data': {
+                            col: record[col]
+                            for col in df.columns[3:]  # id, timestamp, 氏名 以外
+                            if pd.notna(record[col]) and record[col] != '情報なし'
+                        }
+                    })
+                
+                context.update({
+                    'name': name,
+                    'matching_records': records
+                })
+                
+                print(f"Found {len(records)} matching records")
+                return self.render_to_response(context)
+            
+            print("No matching records found")
+            return redirect('adjust-categories')
+            
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            context['error'] = f"データの取得中にエラーが発生しました：{str(e)}"
+            return self.render_to_response(context)
+
+    def post(self, request, *args, **kwargs):
+        action = request.POST.get('action')
+        record_id = request.POST.get('record_id')  # 選択されたレコードのID
+        
+        print(f"Selected action: {action}, Record ID: {record_id}")
+        
+        if action == 'update' and record_id:
+            # 更新モードとターゲットIDを保存
+            request.session['update_mode'] = True
+            request.session['target_record_id'] = int(record_id)
+            request.session.modified = True
+            
+            print(f"Redirecting to compare-update for record {record_id}")
+            return redirect('compare-update')
+        else:
+            print("Redirecting to adjust-categories for new record")
+            return redirect('adjust-categories')
+
+class CompareUpdateView(TemplateView):
+    template_name = 'textmap/compare_update.html'
+
+    def get(self, request, *args, **kwargs):
+        print("\n=== CompareUpdateView.get ===")
+        
+        if not request.session.get('update_mode'):
+            return redirect('result')
+            
+        target_record_id = request.session.get('target_record_id')
+        temp_data = request.session.get('temp_form_data', {})
+        
+        print("Session data:")
+        print(f"- Target record ID: {target_record_id}")
+        print(f"- Temp data: {temp_data}")
+        
+        # GPT-4の解析結果を取得
+        existing_data = temp_data.get('existing_data', {})
+        name = existing_data.get('氏名', '')
+        
+        context = self.get_context_data(**kwargs)
+        
+        try:
+            df = pd.read_csv('output/mapping_result.csv')
+            target_record = df[df['id'] == target_record_id].iloc[0]
+            
+            print(f"Target record data: {target_record.to_dict()}")
+            print(f"GPT-4 extracted data: {existing_data}")
+            
+            # フィールドの比較データを作成
+            fields = []
+            
+            # CSVの全カラムをチェック
+            for field in df.columns:
+                # id, timestamp, 氏名 は除外
+                if field not in ['id', 'timestamp', '氏名']:
+                    current_value = target_record.get(field, '')
+                    new_value = existing_data.get(field, '')
+                    
+                    # 空値や'情報なし'を標準化
+                    if pd.isna(current_value) or current_value == '情報なし':
+                        current_value = ''
+                    if pd.isna(new_value) or new_value == '情報なし':
+                        new_value = ''
+                    
+                    # 値が異なる場合のみ表示
+                    if str(current_value) != str(new_value) and new_value:
+                        fields.append({
+                            'name': field,
+                            'current_value': current_value,
+                            'new_value': new_value,
+                            'has_changes': True
+                        })
+            
+            print(f"Fields to update: {fields}")
+            
+            context.update({
+                'fields': fields,
+                'name': name,
+                'record_id': target_record_id
+            })
+            
+            return self.render_to_response(context)
+            
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            print("Stack trace:", traceback.format_exc())
+            context['error'] = f"データの取得中にエラーが発生しました：{str(e)}"
+            return self.render_to_response(context)
+
+    def post(self, request, *args, **kwargs):
+        target_record_id = request.session.get('target_record_id')
+        action = request.POST.get('action')
+        field_name = request.POST.get('field_name')
+        
+        print(f"\n=== CompareUpdateView.post ===")
+        print(f"Action: {action}")
+        print(f"Field: {field_name}")
+        
+        try:
+            df = pd.read_csv('output/mapping_result.csv')
+            target_idx = df[df['id'] == target_record_id].index[0]
+            
+            if action == 'update':
+                # 新しい値で更新
+                new_value = request.POST.get(f'new_{field_name}')
+                if new_value:
+                    df.at[target_idx, field_name] = new_value
+                    print(f"Updated {field_name} to: {new_value}")
+                    
+            elif action == 'keep':
+                # 現在の値を維持
+                current_value = df.at[target_idx, field_name]
+                print(f"Keeping current value for {field_name}: {current_value}")
+                
+                # セッションの temp_form_data も更新
+                temp_data = request.session.get('temp_form_data', {})
+                if 'existing_data' in temp_data:
+                    temp_data['existing_data'][field_name] = current_value
+                    request.session['temp_form_data'] = temp_data
+                    request.session.modified = True
+            
+            df.to_csv('output/mapping_result.csv', index=False)
+            
+            return JsonResponse({
+                'success': True,
+                'message': f'{field_name} was successfully processed'
+            })
+            
+        except Exception as e:
+            print(f"Error updating CSV: {e}")
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            })

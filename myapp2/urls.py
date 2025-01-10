@@ -16,10 +16,20 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from textsmap.views import TextProcessView, CategoryAdjustView, ResultView
+from textsmap.views import (
+    TextProcessView, 
+    NameConfirmView,
+    DuplicateCheckView,
+    CategoryAdjustView, 
+    CompareUpdateView,
+    ResultView
+)
 
 urlpatterns = [
     path('', TextProcessView.as_view(), name='text-process'),
+    path('confirm-name/', NameConfirmView.as_view(), name='confirm-name'),
+    path('check-duplicate/', DuplicateCheckView.as_view(), name='check-duplicate'),
     path('adjust-categories/', CategoryAdjustView.as_view(), name='adjust-categories'),
+    path('compare-update/', CompareUpdateView.as_view(), name='compare-update'),
     path('result/', ResultView.as_view(), name='result'),
 ]

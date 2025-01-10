@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container mt-5">
+    <h2>データ更新：{{ name }}さん</h2>
+    
+    {% if error %}
+    <div class="alert alert-danger">
+        {{ error }}
+    </div>
+    {% endif %}
+    
+    <table class="table">
+        <thead>
+            <tr>
+                <th>フィールド</th>
+                <th>現在の値</th>
+                <th>更新後の値</th>
+                <th>アクション</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for field in fields %}
+            <tr id="row_{{ field.name }}">
+                <td>{{ field.name }}</td>
+                <td>{{ field.current_value }}</td>
+                <td>
+                    <input type="text" 
+                           id="new_{{ field.name }}" 
+                           name="new_{{ field.name }}" 
+                           value="{{ field.new_value }}" 
+                           class="form-control">
+                </td>
+                <td>
+                    <div class="btn-group" role="group">
+                        <button type="button" 
+                                onclick="updateField('{{ field.name }}', 'update')" 
+                                class="btn btn-primary btn-sm">
+                            更新
+                        </button>
+                        <button type="button" 
+                                onclick="updateField('{{ field.name }}', 'keep')" 
+                                class="btn btn-secondary btn-sm">
+                            更新しない
+                        </button>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <a href="{% url 'result' %}" class="btn btn-success">完了</a>
+    <a href="javascript:history.back()" class="btn btn-light">戻る</a>
+</div>
+
+<script>
+function updateField(fieldName, action) {
+    const button = event.target;
+    const originalText = button.innerText;
+    button.disabled = true;
+    button.innerText = '処理中...';
+    
+    const formData = new FormData();
+    formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+    formData.append('field_name', fieldName);
+    formData.append('action', action);
+    if (action === 'update') {
+        formData.append(`new_${fieldName}`, document.getElementById(`new_${fieldName}`).value);
+    }
+    
+    fetch('{% url "compare-update" %}', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // 行を非表示にする
+            document.getElementById(`row_${fieldName}`).style.display = 'none';
+        } else {
+            alert('エラーが発生しました：' + data.error);
+            button.innerText = originalText;
+        }
+        button.disabled = false;
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('エラーが発生しました');
+        button.innerText = originalText;
+        button.disabled = false;
+    });
+}
+</script>
+{% endblock %} 

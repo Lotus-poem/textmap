@@ -30,22 +30,35 @@ TextMap - GPT-4を活用したテキスト分類・カテゴリマッピング�
 - models.py: https://github.com/Lotus-poem/textmap/blob/main/textsmap/models.py
 
 ■ アプリケーション設定（myapp）
-- urls.py: https://github.com/Lotus-poem/textmap/blob/main/myapp/urls.py
-- apps.py: https://github.com/Lotus-poem/textmap/blob/main/myapp/apps.py
-- admin.py: https://github.com/Lotus-poem/textmap/blob/main/myapp/admin.py
+- urls.py: https://github.com/Lotus-poem/textmap/blob/main/myapp2/urls.py
+- apps.py: https://github.com/Lotus-poem/textmap/blob/main/myapp2/apps.py
+- admin.py: https://github.com/Lotus-poem/textmap/blob/main/myapp2/admin.py
 
 ■ テンプレート
 - テキスト処理画面: https://github.com/Lotus-poem/textmap/blob/main/templates/textsmap/process_text.html
 - カテゴリー調整画面: https://github.com/Lotus-poem/textmap/blob/main/templates/textsmap/adjust_categories.html
 - 結果表示画面: https://github.com/Lotus-poem/textmap/blob/main/templates/textsmap/result.html
 
+■説明文
+ - https://github.com/Lotus-poem/textmap/blob/main/readme.txt
+ 
 【UIフロー】
 process_text.html
   ↓ （テキスト入力・解析実行）
+confirm_name.html
+  ↓ （氏名の確認・編集）
+check_duplicate.html
+  ↓ （既存データ照合・更新選択）
 adjust_categories.html
   ↓ （カテゴリーの調整・確定）
-result.html
-  ↓ （結果の確認・エクスポート）
+  ↓
+  ├→ [新規追加の場合] result.html
+  │     ↓ （結果の確認・エクスポート）
+  │
+  └→ [更新の場合] compare_update.html
+        ↓ （データ比較・更新）
+      result.html
+        ↓ （結果の確認・エクスポート）
 process_text.html
   （新規テキスト入力へ）
 
