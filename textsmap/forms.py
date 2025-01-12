@@ -10,35 +10,50 @@ class TextProcessForm(forms.ModelForm):
         } 
 
 class CategoryAdjustmentForm(forms.Form):
-    def __init__(self, new_categories=None, existing_categories=None, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
+        # new_categoriesとexisting_dataを取得
+        new_categories = kwargs.pop('new_categories', {})
+        existing_data = kwargs.pop('existing_data', {})
         super().__init__(*args, **kwargs)
         
-        # new_categoriesがNoneの場合は空の辞書を使用
-        new_categories = new_categories or {}
-        
-        # existing_categoriesがNoneの場合はデフォルト値を使用
-        existing_categories = existing_categories or ['氏名', '会社名']
+        print("\n=== CategoryAdjustmentForm: 初期化 ===")
+        print(f"新規カテゴリー: {list(new_categories.keys())}")
+        print(f"既存データのキー: {list(existing_data.keys())}")
         
         # 各新カテゴリーに対してフィールドを作成
-        for category in new_categories.keys():
-            self.fields[f'action_{category}'] = forms.ChoiceField(
+        for category, value in new_categories.items():
+            # アクション選択フィールド
+            action_field = f'action_{category}'
+            self.fields[action_field] = forms.ChoiceField(
                 choices=[
-                    ('add', '追加'),
-                    ('rename', '名前を変更'),
-                    ('merge', '既存カテゴリーと統合'),
-                    ('ignore', '無視')
+                    ('add', 'このまま追加'),
+                    ('rename', '名前を変更して追加'),
+                    ('merge', '既存カテゴリーに統合')
                 ],
                 initial='add',
-                widget=forms.RadioSelect
+                widget=forms.RadioSelect,
+                label=f'「{category}」({value}) の処理方法'  # 値も表示
             )
             
-            self.fields[f'rename_{category}'] = forms.CharField(
+            # 名前変更用フィールド
+            rename_field = f'rename_{category}'
+            self.fields[rename_field] = forms.CharField(
                 required=False,
-                widget=forms.TextInput(attrs={'class': 'form-control'})
+                widget=forms.TextInput(attrs={
+                    'class': 'form-control',
+                    'placeholder': '新しいカテゴリー名を入力'
+                }),
+                label='→ 新しい名前'
             )
             
-            self.fields[f'merge_{category}'] = forms.ChoiceField(
-                choices=[(c, c) for c in existing_categories],
+            # 統合先選択フィールド
+            merge_field = f'merge_{category}'
+            existing_choices = [(k, f'{k}: {v}') for k, v in existing_data.items()]
+            self.fields[merge_field] = forms.ChoiceField(
+                choices=[('', '選択してください')] + existing_choices,  # 空の選択肢を追加
                 required=False,
-                widget=forms.Select(attrs={'class': 'form-control'})
+                widget=forms.Select(attrs={
+                    'class': 'form-control'
+                }),
+                label='→ 統合先のカテゴリー'
             ) 

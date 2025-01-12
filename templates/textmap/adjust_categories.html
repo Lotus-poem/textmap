@@ -1,60 +1,79 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
 
 {% block content %}
 <div class="container mt-4">
     <h2>カテゴリーの調整</h2>
+    <p class="text-muted mb-4">新しく検出されたカテゴリーの処理方法を選択してください。</p>
     
     <form method="post">
         {% csrf_token %}
         
         {% for category, value in new_categories.items %}
             <div class="card mb-4">
-                <div class="card-header">
-                    <h5>新カテゴリー: {{ category }}</h5>
-                    <p>値: {{ value }}</p>
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">新カテゴリー「{{ category }}」</h5>
+                    <p class="text-muted mb-0">検出された値: {{ value }}</p>
                 </div>
                 <div class="card-body">
                     <div class="form-group">
-                        <label>アクション:</label><br>
-                        <div class="form-check">
-                            <input type="radio" name="action_{{ category }}" value="add" class="form-check-input action-radio" id="add_{{ category }}" checked>
-                            <label class="form-check-label" for="add_{{ category }}">追加</label>
+                        <label class="font-weight-bold">処理方法を選択:</label><br>
+                        <div class="form-check mb-3">
+                            <input type="radio" name="action_{{ category }}" value="add" 
+                                   class="form-check-input action-radio" 
+                                   id="add_{{ category }}" checked>
+                            <label class="form-check-label" for="add_{{ category }}">
+                                このまま追加
+                            </label>
                         </div>
-                        <div class="form-check">
-                            <input type="radio" name="action_{{ category }}" value="rename" class="form-check-input action-radio" id="rename_{{ category }}">
-                            <label class="form-check-label" for="rename_{{ category }}">名前を変更</label>
+                        
+                        <div class="form-check mb-3">
+                            <input type="radio" name="action_{{ category }}" value="rename" 
+                                   class="form-check-input action-radio" 
+                                   id="rename_{{ category }}">
+                            <label class="form-check-label" for="rename_{{ category }}">
+                                名前を変更して追加
+                            </label>
                             <div class="ml-4 rename-field" style="display: none;">
-                                <input type="text" name="rename_{{ category }}" class="form-control mt-2" placeholder="新しい名前を入力">
+                                <input type="text" name="rename_{{ category }}" 
+                                       class="form-control mt-2" 
+                                       placeholder="新しいカテゴリー名を入力">
                             </div>
                         </div>
+                        
                         <div class="form-check">
-                            <input type="radio" name="action_{{ category }}" value="merge" class="form-check-input action-radio" id="merge_{{ category }}">
-                            <label class="form-check-label" for="merge_{{ category }}">既存カテゴリーと統合</label>
+                            <input type="radio" name="action_{{ category }}" value="merge" 
+                                   class="form-check-input action-radio" 
+                                   id="merge_{{ category }}">
+                            <label class="form-check-label" for="merge_{{ category }}">
+                                既存カテゴリーに統合
+                            </label>
                             <div class="ml-4 merge-field" style="display: none;">
                                 <select name="merge_{{ category }}" class="form-control mt-2">
-                                    {% for existing in existing_categories %}
-                                        <option value="{{ existing }}">{{ existing }}</option>
+                                    <option value="">統合先のカテゴリーを選択</option>
+                                    {% for existing_key, existing_value in existing_data.items %}
+                                        <option value="{{ existing_key }}">
+                                            {{ existing_key }}
+                                        </option>
                                     {% endfor %}
                                 </select>
                             </div>
-                        </div>
-                        <div class="form-check">
-                            <input type="radio" name="action_{{ category }}" value="ignore" class="form-check-input action-radio" id="ignore_{{ category }}">
-                            <label class="form-check-label" for="ignore_{{ category }}">無視</label>
                         </div>
                     </div>
                 </div>
             </div>
         {% endfor %}
         
-        <button type="submit" class="btn btn-primary">確定して処理を続行</button>
+        <div class="text-center mt-4 mb-5">
+            <button type="submit" class="btn btn-primary btn-lg">
+                カテゴリーの調整を確定
+            </button>
+        </div>
     </form>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const radios = document.querySelectorAll('.action-radio');
-    
     radios.forEach(radio => {
         radio.addEventListener('change', function() {
             const card = this.closest('.card-body');

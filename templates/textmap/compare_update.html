@@ -43,6 +43,11 @@
                                 class="btn btn-secondary btn-sm">
                             更新しない
                         </button>
+                        <button type="button" 
+                                onclick="updateField('{{ field.name }}', 'merge')" 
+                                class="btn btn-info btn-sm">
+                            両方保持
+                        </button>
                     </div>
                 </td>
             </tr>
@@ -65,7 +70,9 @@ function updateField(fieldName, action) {
     formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
     formData.append('field_name', fieldName);
     formData.append('action', action);
-    if (action === 'update') {
+    
+    // update または merge の場合は新しい値を送信
+    if (action === 'update' || action === 'merge') {
         formData.append(`new_${fieldName}`, document.getElementById(`new_${fieldName}`).value);
     }
     

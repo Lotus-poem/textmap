@@ -1,7 +1,7 @@
 from django.shortcuts import render, redirect
 from django.views.generic import CreateView, FormView, TemplateView
 from .models import MappedText, ProcessedText
-from .forms import TextProcessForm
+from .forms import TextProcessForm, CategoryAdjustmentForm
 from django.contrib import messages
 from openai import OpenAI
 from .config import (
@@ -21,6 +21,7 @@ import logging
 import traceback
 from django.http import JsonResponse
 from datetime import datetime
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -140,104 +141,85 @@ class TextProcessView(CreateView):
             form.add_error(None, f'エラーが発生しました：{str(e)}')
             return self.form_invalid(form)
 
-class CategoryAdjustForm(forms.Form):
-    def __init__(self, *args, new_categories=None, existing_categories=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        if new_categories:
-            for category, value in new_categories.items():
-                self.fields[f'action_{category}'] = forms.ChoiceField(
-                    label=f'新カテゴリー「{category}」（値: {value}）の処理',
-                    choices=[
-                        ('add', 'このカテゴリーを新規追加する'),
-                        ('rename', 'カテゴリー名を変更して追加する'),
-                        ('merge', '既存のカテゴリーに統合する'),
-                        ('skip', 'このデータは使用しない')
-                    ],
-                    widget=forms.RadioSelect,
-                    initial='add'
-                )
-                self.fields[f'rename_{category}'] = forms.CharField(
-                    label='新しいカテゴリー名',
-                    required=False
-                )
-                self.fields[f'merge_{category}'] = forms.ChoiceField(
-                    label='統合先のカテゴリー',
-                    choices=[(c, c) for c in existing_categories],
-                    required=False
-                )
-
 class CategoryAdjustView(FormView):
     template_name = 'textmap/adjust_categories.html'
-    form_class = CategoryAdjustForm
-    success_url = '/result/'
+    form_class = CategoryAdjustmentForm
 
-    def get_current_categories(self):
-        """現在のカテゴリーリストを取得"""
-        from .config import get_current_categories
-        categories = get_current_categories()
-        return [cat for cat in categories if cat not in ['id', 'timestamp']]
+    def get_form_kwargs(self):
+        """フォームの初期化時に渡す引数を設定"""
+        kwargs = super().get_form_kwargs()
+        temp_data = self.request.session.get('temp_form_data', {})
+        
+        kwargs['new_categories'] = temp_data.get('new_categories', {})
+        kwargs['existing_data'] = temp_data.get('existing_data', {})
+        
+        return kwargs
 
     def get_context_data(self, **kwargs):
+        """テンプレートに渡すコンテキストを設定"""
         context = super().get_context_data(**kwargs)
         temp_data = self.request.session.get('temp_form_data', {})
+        
         context['new_categories'] = temp_data.get('new_categories', {})
-        context['existing_categories'] = self.get_current_categories()
+        context['existing_data'] = temp_data.get('existing_data', {})
+        
+        print("\n=== CategoryAdjustView: コンテキスト設定 ===")
+        print(f"新規カテゴリー: {list(context['new_categories'].keys())}")
+        print(f"既存データ: {list(context['existing_data'].keys())}")
+        
         return context
 
     def form_valid(self, form):
+        """フォームのバリデーション成功時の処理"""
         try:
-            # セッションから一時データを取得
+            print("\n=== CategoryAdjustView: フォーム処理開始 ===")
             temp_data = self.request.session.get('temp_form_data', {})
-            new_categories = temp_data.get('new_categories', {})
-            existing_data = temp_data.get('existing_data', {})  # 既存データを取得
             
-            # 調整済みカテゴリーを保存するための辞書
-            adjusted_data = existing_data.copy()  # 既存データをベースにする
-            
-            # カテゴリーの調整結果を処理
-            for category, value in new_categories.items():
-                action = self.request.POST.get(f'action_{category}')
+            # 新規カテゴリーの処理
+            for category, value in temp_data.get('new_categories', {}).items():
+                action = form.cleaned_data.get(f'action_{category}')
+                print(f"\nカテゴリー '{category}' の処理:")
+                print(f"- 現在の値: {value}")
+                print(f"- 選択されたアクション: {action}")
                 
                 if action == 'add':
-                    adjusted_data[category] = value
+                    temp_data['existing_data'][category] = value
+                    print(f"- 新規追加: {category} = {value}")
+                
                 elif action == 'rename':
-                    new_name = self.request.POST.get(f'rename_{category}')
+                    new_name = form.cleaned_data.get(f'rename_{category}')
                     if new_name:
-                        adjusted_data[new_name] = value
+                        temp_data['existing_data'][new_name] = value
+                        print(f"- 名前変更: {category} → {new_name} = {value}")
+                
                 elif action == 'merge':
-                    merge_to = self.request.POST.get(f'merge_{category}')
-                    if merge_to in adjusted_data:
-                        adjusted_data[merge_to] = f"{adjusted_data[merge_to]}; {value}"
-                    else:
-                        adjusted_data[merge_to] = value
-
-            # ProcessedTextモデルに保存
-            processed_text_obj = ProcessedText.objects.create(
-                original_text=temp_data.get('input_text', ''),
-                processed_data=adjusted_data
-            )
-
-            # CSVファイルに保存
-            from .config import save_mapping_result
-            save_mapping_result(adjusted_data)
-
-            # トークン情報も保存
-            tokens_info = temp_data.get('tokens_info', {})
-            if tokens_info:
-                processed_text_obj.prompt_tokens = tokens_info.get('prompt_tokens', 0)
-                processed_text_obj.completion_tokens = tokens_info.get('completion_tokens', 0)
-                processed_text_obj.total_tokens = tokens_info.get('total_tokens', 0)
-                processed_text_obj.cost_usd = tokens_info.get('cost_usd', 0)
-                processed_text_obj.save()
-
-            # セッションをクリア
-            if 'temp_form_data' in self.request.session:
-                del self.request.session['temp_form_data']
-
-            messages.success(self.request, 'カテゴリーの調整が完了しました。')
-            return super().form_valid(form)
-
+                    target = form.cleaned_data.get(f'merge_{category}')
+                    if target:
+                        current = temp_data['existing_data'].get(target, '')
+                        merged_value = f"{current} | {value}" if current else value
+                        temp_data['existing_data'][target] = merged_value
+                        print(f"- 統合: {category} → {target} = {merged_value}")
+            
+            # 新規カテゴリーをクリア
+            temp_data['new_categories'] = {}
+            
+            # セッションを更新
+            self.request.session['temp_form_data'] = temp_data
+            self.request.session.modified = True
+            
+            messages.success(self.request, 'カテゴリーの調整が完了しました')
+            print("=== CategoryAdjustView: フォーム処理完了 ===\n")
+            
+            # 更新モードの場合はCompareUpdateViewへ
+            if self.request.session.get('target_record_id'):
+                print("更新モード: compare-updateへリダイレクト")
+                return redirect('compare-update')
+            else:
+                print("新規モード: resultへリダイレクト")
+                return redirect('result')
+            
         except Exception as e:
+            print(f"カテゴリー調整エラー: {str(e)}")
             messages.error(self.request, f'エラーが発生しました: {str(e)}')
             return self.form_invalid(form)
 
@@ -252,50 +234,71 @@ class ResultView(View):
         print(f"\n=== ResultView: データ取得 ===")
         print(f"Target ID: {target_id}")
 
-        if target_id:  # 更新の場合
-            try:
-                df = pd.read_csv('output/mapping_result.csv')
-                record = df[df['id'] == target_id].iloc[0].to_dict()
-                print(f"更新レコードを表示:")
-                print(f"- ID: {target_id}")
-                print(f"- 名前: {record.get('氏名', '')}")
-                return {
-                    'original_text': temp_data.get('input_text', ''),
-                    'processed_data': record,
-                    'tokens_info': temp_data.get('tokens_info', {}),
-                    'is_update': True
-                }
-            except Exception as e:
-                print(f"更新レコードの取得エラー: {str(e)}")
-                messages.error(self.request, f'更新レコードの取得に失敗しました: {str(e)}')
+        # 新規追加の場合（CSVファイルが存在しない場合も含む）
+        if not target_id or not os.path.exists('output/mapping_result.csv'):
+            print("新規レコードを表示")
+            return {
+                'original_text': temp_data.get('input_text', ''),
+                'processed_data': temp_data.get('existing_data', {}),
+                'tokens_info': temp_data.get('tokens_info', {}),
+                'is_update': False
+            }
 
-        # 新規追加の場合
-        print("新規レコードを表示")
-        return {
-            'original_text': temp_data.get('input_text', ''),
-            'processed_data': temp_data.get('existing_data', {}),
-            'tokens_info': temp_data.get('tokens_info', {}),
-            'is_update': False
-        }
+        # 更新の場合
+        try:
+            df = pd.read_csv('output/mapping_result.csv')
+            record = df[df['id'] == target_id].iloc[0].to_dict()
+            
+            # 既存レコードとexisting_dataをマージ
+            processed_data = record.copy()
+            processed_data.update(temp_data.get('existing_data', {}))
+            
+            return {
+                'original_text': temp_data.get('input_text', ''),
+                'processed_data': processed_data,
+                'tokens_info': temp_data.get('tokens_info', {}),
+                'is_update': True
+            }
+        except Exception as e:
+            print(f"更新レコードの取得エラー: {str(e)}")
+            return {
+                'original_text': temp_data.get('input_text', ''),
+                'processed_data': temp_data.get('existing_data', {}),
+                'tokens_info': temp_data.get('tokens_info', {}),
+                'is_update': False
+            }
 
     def update_csv(self, data):
         """CSVファイルを更新"""
         try:
-            df = pd.read_csv('output/mapping_result.csv')
+            print("\n=== ResultView: CSV更新開始 ===")
+            temp_data = self.request.session.get('temp_form_data', {})
+            
+            # カラムの準備（idとtimestampを先頭に）
+            all_columns = ['id', 'timestamp'] + list(temp_data.get('existing_data', {}).keys())
+            #print(f"使用カラム: {all_columns}")
+            
+            # CSVファイルの存在確認
+            if not os.path.exists('output/mapping_result.csv'):
+                print("CSVファイルが存在しません。新規作成します。")
+                df = pd.DataFrame(columns=all_columns)
+                os.makedirs('output', exist_ok=True)
+            else:
+                df = pd.read_csv('output/mapping_result.csv')
+                # 新しいカラムがあれば追加
+                for col in all_columns:
+                    if col not in df.columns:
+                        print(f"新しいカラムを追加: {col}")
+                        df[col] = ''
+
             target_id = self.request.session.get('target_record_id')
             
-            print(f"\n=== CSV更新 ===")
             if target_id:  # 既存レコードの更新
                 print(f"レコードを更新: ID {target_id}")
-                # データの整形
-                update_data = {}
-                for column in df.columns:
-                    update_data[column] = data.get(column, '')
-                
-                # インデックスを使用して更新
                 idx = df.index[df['id'] == target_id].tolist()[0]
-                for col in df.columns:
-                    df.at[idx, col] = update_data[col]
+                for col, value in data.items():
+                    if col not in ['id', 'timestamp']:  # idとtimestampは更新しない
+                        df.at[idx, col] = value
             else:  # 新規レコードの追加
                 data['id'] = len(df) + 1
                 data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -303,6 +306,7 @@ class ResultView(View):
                 df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
             
             df.to_csv('output/mapping_result.csv', index=False)
+            print("=== CSV更新完了 ===\n")
             return True, None
             
         except Exception as e:
@@ -369,6 +373,11 @@ class NameConfirmView(TemplateView):
         print(f"検索する名前: '{confirmed_name}'")
 
         try:
+            # CSVファイルの存在確認
+            if not os.path.exists('output/mapping_result.csv'):
+                print("CSVファイルが存在しません。重複チェックをスキップします。")
+                return redirect('adjust-categories')
+
             df = pd.read_csv('output/mapping_result.csv')
             print(f"CSVファイルの行数: {len(df)}")
             
@@ -380,20 +389,8 @@ class NameConfirmView(TemplateView):
             print(f"一致するレコード数: {len(matching_records)}")
             
             if not matching_records.empty:
-                # 最新（最大ID）のレコードを使用
-                latest_record = matching_records.iloc[0]
-                record_id = latest_record['id']
-                
-                print(f"最新レコードのID: {record_id}")
                 print(f"一致するレコード:")
                 print(matching_records[['id', '氏名', 'timestamp']].to_string())
-                
-                # 重複データをセッションに保存
-                request.session['existing_record'] = latest_record.to_dict()
-                request.session['target_record_id'] = int(record_id)
-                request.session.modified = True
-                
-                print("check-duplicateにリダイレクト")
                 return redirect('check-duplicate')
             
             print("重複なし - adjust-categoriesに進みます")
@@ -401,19 +398,17 @@ class NameConfirmView(TemplateView):
             
         except Exception as e:
             print(f"エラーが発生しました: {str(e)}")
+            # エラーが発生しても処理を継続
             return redirect('adjust-categories')
 
 class DuplicateCheckView(TemplateView):
     template_name = 'textmap/check_duplicate.html'
 
     def get(self, request, *args, **kwargs):
-        print("DuplicateCheckView.get called")
         
         temp_data = request.session.get('temp_form_data', {})
         existing_data = temp_data.get('existing_data', {})
         name = existing_data.get('氏名', '')
-        
-        print(f"Looking for name: {name}")
         
         context = self.get_context_data(**kwargs)
         
@@ -439,10 +434,10 @@ class DuplicateCheckView(TemplateView):
                 
                 context.update({
                     'name': name,
-                    'matching_records': records
+                    'matching_records': records,
+                    'has_new_categories': bool(temp_data.get('new_categories', {}))  # 新カテゴリーの有無を追加
                 })
                 
-                print(f"Found {len(records)} matching records")
                 return self.render_to_response(context)
             
             print("No matching records found")
@@ -455,9 +450,13 @@ class DuplicateCheckView(TemplateView):
 
     def post(self, request, *args, **kwargs):
         action = request.POST.get('action')
-        record_id = request.POST.get('record_id')  # 選択されたレコードのID
+        record_id = request.POST.get('record_id')
         
-        print(f"Selected action: {action}, Record ID: {record_id}")
+        print(f"\n=== Duplicate Check ===")
+        print(f"選択したアクション: {action}, 保存先ID: {record_id}")
+        
+        temp_data = request.session.get('temp_form_data', {})
+        has_new_categories = bool(temp_data.get('new_categories', {}))
         
         if action == 'update' and record_id:
             # 更新モードとターゲットIDを保存
@@ -465,8 +464,12 @@ class DuplicateCheckView(TemplateView):
             request.session['target_record_id'] = int(record_id)
             request.session.modified = True
             
-            print(f"Redirecting to compare-update for record {record_id}")
-            return redirect('compare-update')
+            if has_new_categories:
+                print("Redirecting to adjust-categories for new categories")
+                return redirect('adjust-categories')
+            else:
+                print(f"Redirecting to compare-update for record {record_id}")
+                return redirect('compare-update')
         else:
             print("Redirecting to adjust-categories for new record")
             return redirect('adjust-categories')
@@ -477,17 +480,11 @@ class CompareUpdateView(TemplateView):
     def get(self, request, *args, **kwargs):
         print("\n=== CompareUpdateView.get ===")
         
-        if not request.session.get('update_mode'):
+        if not request.session.get('target_record_id'):
             return redirect('result')
             
         target_record_id = request.session.get('target_record_id')
         temp_data = request.session.get('temp_form_data', {})
-        
-        print("Session data:")
-        print(f"- Target record ID: {target_record_id}")
-        print(f"- Temp data: {temp_data}")
-        
-        # GPT-4の解析結果を取得
         existing_data = temp_data.get('existing_data', {})
         name = existing_data.get('氏名', '')
         
@@ -497,33 +494,32 @@ class CompareUpdateView(TemplateView):
             df = pd.read_csv('output/mapping_result.csv')
             target_record = df[df['id'] == target_record_id].iloc[0]
             
-            print(f"Target record data: {target_record.to_dict()}")
-            print(f"GPT-4 extracted data: {existing_data}")
+            #print(f"Target record data: {target_record.to_dict()}")
+            #print(f"GPT-4 extracted data: {existing_data}")
             
             # フィールドの比較データを作成
             fields = []
             
-            # CSVの全カラムをチェック
-            for field in df.columns:
-                # id, timestamp, 氏名 は除外
-                if field not in ['id', 'timestamp', '氏名']:
-                    current_value = target_record.get(field, '')
-                    new_value = existing_data.get(field, '')
+            # existing_dataの各フィールドをチェック
+            for field, new_value in existing_data.items():
+                if field in ['id', 'timestamp', '氏名']:
+                    continue
                     
-                    # 空値や'情報なし'を標準化
-                    if pd.isna(current_value) or current_value == '情報なし':
-                        current_value = ''
-                    if pd.isna(new_value) or new_value == '情報なし':
-                        new_value = ''
+                current_value = target_record.get(field, '')
+                if pd.isna(current_value):
+                    current_value = ''
+                
+                # 両方の値が存在し、「情報なし」でない場合のみ処理
+                if (new_value and current_value and 
+                    new_value != '情報なし' and current_value != '情報なし' and
+                    str(current_value) != str(new_value)):
                     
-                    # 値が異なる場合のみ表示
-                    if str(current_value) != str(new_value) and new_value:
-                        fields.append({
-                            'name': field,
-                            'current_value': current_value,
-                            'new_value': new_value,
-                            'has_changes': True
-                        })
+                    fields.append({
+                        'name': field,
+                        'current_value': current_value,
+                        'new_value': new_value,
+                        'has_changes': True
+                    })
             
             print(f"Fields to update: {fields}")
             
@@ -551,29 +547,42 @@ class CompareUpdateView(TemplateView):
         print(f"Field: {field_name}")
         
         try:
+            # CSVから現在のデータを取得
             df = pd.read_csv('output/mapping_result.csv')
-            target_idx = df[df['id'] == target_record_id].index[0]
+            current_record = df[df['id'] == target_record_id].iloc[0].to_dict()
+            
+            temp_data = request.session.get('temp_form_data', {})
             
             if action == 'update':
-                # 新しい値で更新
+                # 新しい値をセッションに保存
                 new_value = request.POST.get(f'new_{field_name}')
                 if new_value:
-                    df.at[target_idx, field_name] = new_value
+                    temp_data['existing_data'][field_name] = new_value
                     print(f"Updated {field_name} to: {new_value}")
                     
             elif action == 'keep':
-                # 現在の値を維持
-                current_value = df.at[target_idx, field_name]
+                # 現在の値をセッションに保存
+                current_value = current_record.get(field_name, '')
+                temp_data['existing_data'][field_name] = current_value
                 print(f"Keeping current value for {field_name}: {current_value}")
-                
-                # セッションの temp_form_data も更新
-                temp_data = request.session.get('temp_form_data', {})
-                if 'existing_data' in temp_data:
-                    temp_data['existing_data'][field_name] = current_value
-                    request.session['temp_form_data'] = temp_data
-                    request.session.modified = True
             
-            df.to_csv('output/mapping_result.csv', index=False)
+            elif action == 'merge':
+                # 現在の値と新しい値を結合
+                current_value = current_record.get(field_name, '')
+                new_value = request.POST.get(f'new_{field_name}')
+                merged_value = f"{current_value} | {new_value}"
+                temp_data['existing_data'][field_name] = merged_value
+                print(f"Merged values for {field_name}: {merged_value}")
+            
+            # 他のフィールドの値を保持
+            for field, value in current_record.items():
+                if field not in ['id', 'timestamp']:
+                    if field not in temp_data['existing_data'] or temp_data['existing_data'][field] == '情報なし':
+                        temp_data['existing_data'][field] = value
+            
+            # セッションを更新
+            request.session['temp_form_data'] = temp_data
+            request.session.modified = True
             
             return JsonResponse({
                 'success': True,
@@ -581,7 +590,7 @@ class CompareUpdateView(TemplateView):
             })
             
         except Exception as e:
-            print(f"Error updating CSV: {e}")
+            print(f"Error processing field: {e}")
             return JsonResponse({
                 'success': False,
                 'error': str(e)
