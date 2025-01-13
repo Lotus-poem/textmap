@@ -1,17 +1,23 @@
 import os
-import pandas as pd
+import sys
+# 標準出力の設定を先に行う
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+# その後でGoogle関連のライブラリをインポート
+from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 from pathlib import Path
-from datetime import datetime
+from django.conf import settings
 
 # プロジェクトのルートディレクトリを取得
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# outputディレクトリのパスを設定
-OUTPUT_DIR = BASE_DIR / 'output'
-MAPPING_CSV = OUTPUT_DIR / 'mapping_result.csv'
+# tempディレクトリのパスを設定
+TEMP_DIR = BASE_DIR / 'temp'
+MAPPING_CSV = TEMP_DIR / 'mapping_result.csv'
 
 # 必要なディレクトリを作成
-OUTPUT_DIR.mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True)
 
 # GPT-4の料金（1000トークンあたり）
 GPT4_PROMPT_COST = 0.03    # プロンプトの料金
@@ -31,43 +37,24 @@ INITIAL_KEYS = [
     "アピールポイント",
 ]
 
-def get_current_categories():
-    """CSVファイルから現在の全カテゴリーを取得"""
-    if not MAPPING_CSV.exists():
-        # CSVが存在しない場合は初期軸のみ返す
-        return INITIAL_KEYS
-    
-    # CSVが存在する場合は、そのカラム名から必要な情報を抽出
-    df = pd.read_csv(MAPPING_CSV, encoding='utf-8-sig')
-    # id, timestampを除外した列名を取得
-    categories = [col for col in df.columns if col not in ['id', 'timestamp']]
-    return categories
+# Spreadsheet設定
+SPREADSHEET_ID = '1jfB1wHqct45GyjOZPMlykjKDqdqvTVcN6IfmfZoQ7tQ'
+SHEET_NAME = 'シート1'  # または必要なシート名
+CREDENTIALS_PATH = os.path.join(
+    settings.BASE_DIR,
+    'credentials',
+    'credentials.json'
+)
 
-def save_mapping_result(mapped_data):
-    """マッピング結果をCSVに保存"""
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    if not MAPPING_CSV.exists():
-        # 初回の場合、新規作成
-        df = pd.DataFrame(columns=['id', 'timestamp'] + INITIAL_KEYS)
-    else:
-        # 既存のCSVを読み込み
-        df = pd.read_csv(MAPPING_CSV, encoding='utf-8-sig')
-    
-    # 新しいデータを準備
-    new_data = {'timestamp': now}
-    new_data.update(mapped_data)
-    
-    # 既存のカラムにない新しいキーがあれば、列を追加
-    new_keys = set(mapped_data.keys()) - set(df.columns)
-    for key in new_keys:
-        df[key] = None  # 新しい列を追加
-    
-    # データを追加
-    df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-    
-    # IDを振り直して保存
-    df['id'] = range(1, len(df) + 1)
-    df.to_csv(MAPPING_CSV, index=False, encoding='utf-8-sig')
-    
-    return df.columns.tolist()  # 最新の列リストを返す 
+def get_sheets_service():
+    """Google Sheets APIのサービスを取得"""
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            CREDENTIALS_PATH,
+            scopes=['https://www.googleapis.com/auth/spreadsheets']
+        )
+        service = build('sheets', 'v4', credentials=credentials)
+        return service
+    except Exception as e:
+        print(f"Sheets API service creation error: {str(e)}")
+        raise 

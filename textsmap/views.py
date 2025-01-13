@@ -6,12 +6,11 @@ from django.contrib import messages
 from openai import OpenAI
 from .config import (
     GPT35_PROMPT_COST, GPT35_COMPLETION_COST, 
-    get_current_categories as config_get_categories,
-    save_mapping_result,
     INITIAL_KEYS,
     GPT4_PROMPT_COST, 
     GPT4_COMPLETION_COST
 )
+from .spreadsheet_utils import upload_to_spreadsheet, download_from_spreadsheet
 import json
 from django.conf import settings
 import pandas as pd
@@ -30,11 +29,44 @@ class TextProcessView(CreateView):
     form_class = TextProcessForm
     template_name = 'textmap/process_text.html'
     
+    def dispatch(self, request, *args, **kwargs):
+        """リクエスト処理前にSpreadsheetからデータを取得"""
+        try:
+            # temp_dirが存在しない場合は作成
+            temp_dir = 'temp'
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir)
+            
+            # Spreadsheetからデータを取得してCSVに保存
+            download_from_spreadsheet('temp/mapping_result.csv')
+            print("Spreadsheetからデータを取得しました")
+            
+        except Exception as e:
+            print(f"Spreadsheetからのデータ取得エラー: {str(e)}")
+            messages.error(request, 'データの取得に失敗しました')
+            # エラー時も処理は継続（新規CSVが作成される）
+        
+        return super().dispatch(request, *args, **kwargs)
+    
     def get_current_categories(self):
         """現在のカテゴリーリストを取得"""
-        from .config import get_current_categories
-        categories = get_current_categories()
-        return [cat for cat in categories if cat not in ['id', 'timestamp']]
+        try:
+            # CSVファイルの存在確認
+            if not os.path.exists('temp/mapping_result.csv'):
+                print("CSVファイルが存在しません。初期カテゴリーを返します。")
+                return [cat for cat in INITIAL_KEYS if cat not in ['id', 'timestamp']]
+            
+            # CSVからカテゴリーを取得
+            df = pd.read_csv('temp/mapping_result.csv')
+            categories = [col for col in df.columns if col not in ['id', 'timestamp']]
+            
+            print(f"現在のカテゴリー: {categories}")
+            return categories or INITIAL_KEYS  # カテゴリーが空の場合は初期カテゴリーを返す
+            
+        except Exception as e:
+            print(f"カテゴリー取得エラー: {str(e)}")
+            # エラー時は初期カテゴリーを返す
+            return [cat for cat in INITIAL_KEYS if cat not in ['id', 'timestamp']]
     
     def process_with_gpt4(self, text, categories):
         """GPT-4による解析を行う"""
@@ -234,8 +266,8 @@ class ResultView(View):
         print(f"\n=== ResultView: データ取得 ===")
         print(f"Target ID: {target_id}")
 
-        # 新規追加の場合（CSVファイルが存在しない場合も含む）
-        if not target_id or not os.path.exists('output/mapping_result.csv'):
+        # 新規追加の場合
+        if not target_id or not os.path.exists('temp/mapping_result.csv'):
             print("新規レコードを表示")
             return {
                 'original_text': temp_data.get('input_text', ''),
@@ -246,12 +278,26 @@ class ResultView(View):
 
         # 更新の場合
         try:
-            df = pd.read_csv('output/mapping_result.csv')
+            df = pd.read_csv('temp/mapping_result.csv')
             record = df[df['id'] == target_id].iloc[0].to_dict()
             
             # 既存レコードとexisting_dataをマージ
             processed_data = record.copy()
-            processed_data.update(temp_data.get('existing_data', {}))
+            
+            # CompareUpdateViewと同じ条件で更新
+            for field, new_value in temp_data.get('existing_data', {}).items():
+                current_value = processed_data.get(field, '')
+                
+                # 新しい値が存在し、「情報なし」でない場合のみ更新
+                if new_value and new_value != '情報なし':
+                    processed_data[field] = new_value
+                elif field in processed_data and processed_data[field] == '情報なし':
+                    # 既存の値が「情報なし」で、新しい値もない場合は
+                    # 「情報なし」を維持
+                    continue
+            
+            print("\n=== 更新後のデータ ===")
+            print(json.dumps(processed_data, indent=2, ensure_ascii=False))
             
             return {
                 'original_text': temp_data.get('input_text', ''),
@@ -276,15 +322,14 @@ class ResultView(View):
             
             # カラムの準備（idとtimestampを先頭に）
             all_columns = ['id', 'timestamp'] + list(temp_data.get('existing_data', {}).keys())
-            #print(f"使用カラム: {all_columns}")
             
             # CSVファイルの存在確認
-            if not os.path.exists('output/mapping_result.csv'):
+            if not os.path.exists('temp/mapping_result.csv'):
                 print("CSVファイルが存在しません。新規作成します。")
                 df = pd.DataFrame(columns=all_columns)
-                os.makedirs('output', exist_ok=True)
+                os.makedirs('temp', exist_ok=True)
             else:
-                df = pd.read_csv('output/mapping_result.csv')
+                df = pd.read_csv('temp/mapping_result.csv')
                 # 新しいカラムがあれば追加
                 for col in all_columns:
                     if col not in df.columns:
@@ -305,7 +350,7 @@ class ResultView(View):
                 print(f"新規レコードを追加: ID {data['id']}")
                 df = pd.concat([df, pd.DataFrame([data])], ignore_index=True)
             
-            df.to_csv('output/mapping_result.csv', index=False)
+            df.to_csv('temp/mapping_result.csv', index=False)
             print("=== CSV更新完了 ===\n")
             return True, None
             
@@ -331,7 +376,15 @@ class ResultView(View):
             success, error = self.update_csv(edited_data)
             
             if success:
-                messages.success(request, '変更を保存しました。')
+                try:
+                    # SpreadsheetにCSVの内容を反映
+                    upload_to_spreadsheet('temp/mapping_result.csv')
+                    print("Spreadsheetの更新が完了しました")
+                    messages.success(request, '変更を保存しました。')
+                except Exception as e:
+                    print(f"Spreadsheet更新エラー: {str(e)}")
+                    messages.warning(request, 'CSVは更新されましたが、Spreadsheetの更新に失敗しました')
+
                 # セッションデータをクリア
                 if 'temp_form_data' in request.session:
                     del request.session['temp_form_data']
@@ -374,11 +427,11 @@ class NameConfirmView(TemplateView):
 
         try:
             # CSVファイルの存在確認
-            if not os.path.exists('output/mapping_result.csv'):
+            if not os.path.exists('temp/mapping_result.csv'):
                 print("CSVファイルが存在しません。重複チェックをスキップします。")
                 return redirect('adjust-categories')
 
-            df = pd.read_csv('output/mapping_result.csv')
+            df = pd.read_csv('temp/mapping_result.csv')
             print(f"CSVファイルの行数: {len(df)}")
             
             # 名前の列を正規化（空白を除去）
@@ -413,7 +466,7 @@ class DuplicateCheckView(TemplateView):
         context = self.get_context_data(**kwargs)
         
         try:
-            df = pd.read_csv('output/mapping_result.csv')
+            df = pd.read_csv('temp/mapping_result.csv')
             
             # 名前が一致する全レコードを取得（タイムスタンプ降順）
             matching_records = df[df['氏名'] == name].sort_values('timestamp', ascending=False)
@@ -491,7 +544,7 @@ class CompareUpdateView(TemplateView):
         context = self.get_context_data(**kwargs)
         
         try:
-            df = pd.read_csv('output/mapping_result.csv')
+            df = pd.read_csv('temp/mapping_result.csv')
             target_record = df[df['id'] == target_record_id].iloc[0]
             
             #print(f"Target record data: {target_record.to_dict()}")
@@ -548,7 +601,7 @@ class CompareUpdateView(TemplateView):
         
         try:
             # CSVから現在のデータを取得
-            df = pd.read_csv('output/mapping_result.csv')
+            df = pd.read_csv('temp/mapping_result.csv')
             current_record = df[df['id'] == target_record_id].iloc[0].to_dict()
             
             temp_data = request.session.get('temp_form_data', {})

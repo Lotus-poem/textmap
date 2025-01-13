@@ -2,6 +2,10 @@
 myapp2/keys.py
 myapp/keys.py
 
+# Credentials
+credentials/
+*.json
+
 # Python
 __pycache__/
 *.pyc
