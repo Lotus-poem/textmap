@@ -16,3 +16,5 @@ db.sqlite3
 # 出力ファイル
 output/
 temp/
+temp/*
+*.csv
