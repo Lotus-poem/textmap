@@ -3,95 +3,77 @@ TextMap - GPT-4を活用したテキスト分類・カテゴリマッピング�
 【システム概要】
 フリーテキストを入力として受け取り、GPT-4による解析を通じて既存のカテゴリー体系への
 マッピングを行うシステム。新しい概念は新カテゴリーとして追加可能で、
-データベースが継続的に進化する仕組みを実装。
+Google Spreadsheetと連携してデータを管理する仕組みを実装。
 
 【主要機能】
 1. テキスト入力・解析機能
    - フリーテキストの入力
    - GPT-4によるテキスト解析
    - 既存カテゴリーへのマッピング
+   - 氏名の重複チェックと更新管理
 
 2. カテゴリー管理機能
    - 新規カテゴリーの追加
    - カテゴリーの統合
    - カテゴリーの名称変更
-   - 不要カテゴリーの除外
+   - 既存データとの比較・更新
 
 3. データ管理機能
-   - 解析結果のデータベース保存
-   - CSVエクスポート
+   - Google Spreadsheetとの同期
+   - 一時データの管理（temp/mapping_result.csv）
    - 処理履歴の管理
    - GPT-4使用コストの追跡
 
 【ファイル構成】
 ■ コアロジック
-- views.py: https://github.com/Lotus-poem/textmap/blob/main/textsmap/views.py
-- forms.py: https://github.com/Lotus-poem/textmap/blob/main/textsmap/forms.py
-- models.py: https://github.com/Lotus-poem/textmap/blob/main/textsmap/models.py
-
-■ アプリケーション設定（myapp）
-- urls.py: https://github.com/Lotus-poem/textmap/blob/main/myapp2/urls.py
-- apps.py: https://github.com/Lotus-poem/textmap/blob/main/myapp2/apps.py
-- admin.py: https://github.com/Lotus-poem/textmap/blob/main/myapp2/admin.py
+- views.py: ビューロジックの実装
+- config.py: システム設定と定数定義
+- spreadsheet_utils.py: Spreadsheet連携機能
+- forms.py: フォーム定義
+- models.py: モデル定義
 
 ■ テンプレート
-- テキスト処理画面: https://github.com/Lotus-poem/textmap/blob/main/templates/textsmap/process_text.html
-- カテゴリー調整画面: https://github.com/Lotus-poem/textmap/blob/main/templates/textsmap/adjust_categories.html
-- 結果表示画面: https://github.com/Lotus-poem/textmap/blob/main/templates/textsmap/result.html
+- process_text.html: テキスト入力画面
+- confirm_name.html: 氏名確認画面
+- check_duplicate.html: 重複チェック画面
+- adjust_categories.html: カテゴリー調整画面
+- compare_update.html: データ比較画面
+- result.html: 結果表示画面
 
-■説明文
- - https://github.com/Lotus-poem/textmap/blob/main/readme.txt
- 
-【UIフロー】
-process_text.html
-  ↓ （テキスト入力・解析実行）
-confirm_name.html
-  ↓ （氏名の確認・編集）
-check_duplicate.html
-  ↓ （既存データ照合・更新選択）
-adjust_categories.html
-  ↓ （カテゴリーの調整・確定）
-  ↓
-  ├→ [新規追加の場合] result.html
-  │     ↓ （結果の確認・エクスポート）
-  │
-  └→ [更新の場合] compare_update.html
-        ↓ （データ比較・更新）
-      result.html
-        ↓ （結果の確認・エクスポート）
-process_text.html
-  （新規テキスト入力へ）
+【データフロー】
+1. アプリケーション起動時
+   - Spreadsheetからデータを取得
+   - temp/mapping_result.csvに保存
 
-【システム処理フロー】
-1. テキスト解析処理
-   - ユーザーからのテキスト入力受付
-   - GPT-4 APIによるテキスト解析
-   - カテゴリーマッピングの生成
+2. テキスト処理時
+   - GPT-4による解析
+   - 氏名の重複チェック
+   - カテゴリーの調整
+   - 既存データとの比較（更新時）
 
-2. カテゴリー処理
-   - 既存カテゴリーとのマッチング
-   - 新規カテゴリーの提案
-   - ユーザーによる調整の反映
+3. 保存時
+   - temp/mapping_result.csvに保存
+   - Spreadsheetへの同期
 
-3. データ管理処理
-   - 確定データのDB保存
-   - 処理履歴の記録
-   - コスト計算・保存
-   - CSVエクスポート
+【システム要件】
+- Python 3.8以上
+- Django 4.0以上
+- OpenAI API Key
+- Google Cloud Platformの認証情報
+- Google Sheets API有効化
 
-【データベース設計】
-- TextInput: 入力テキストの保存
-- Category: カテゴリー定義の管理
-- TextCategory: テキストとカテゴリーの関連付け
-- ProcessingHistory: 処理履歴とコスト管理
+【環境設定】
+1. 認証情報の配置
+   - credentials/credentials.json: Google認証情報
+   - .env: OpenAI APIキー等の環境変数
 
-【技術スタック】
-- フレームワーク: Django
-- AI: GPT-4 API
-- データベース: SQLite（開発環境）
-- フロントエンド: HTML/CSS/JavaScript
+2. 初期設定
+   - temp/ディレクトリの作成
+   - 必要なPythonパッケージのインストール
+   - データベースのマイグレーション
 
 【注意事項】
-- GPT-4 APIキーの適切な管理が必要
-- コスト管理のための定期的なモニタリングを推奨
-- 新カテゴリー追加時は既存カテゴリーとの重複確認が必要 
+- GPT-4 APIキーの適切な管理
+- Google認証情報の適切な管理
+- コスト管理のための定期的なモニタリング
+- 一時ファイル（temp/）の定期的なクリーンアップ
