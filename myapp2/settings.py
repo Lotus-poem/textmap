@@ -150,3 +150,13 @@ LOGGING = {
 
 SECRET_KEY = keys.SECRET_KEY
 OPENAI_API_KEY = keys.OPENAI_API_KEY
+
+# ファイルアップロード設定
+FILE_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024  # 25MB
+FILE_UPLOAD_HANDLERS = [
+    'django.core.files.uploadhandler.MemoryFileUploadHandler',
+    'django.core.files.uploadhandler.TemporaryFileUploadHandler',
+]
+
+# 許可する音声ファイル形式
+ALLOWED_AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.wav', '.aac']

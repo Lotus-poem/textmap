@@ -1,5 +1,7 @@
 from django import forms
 from .models import MappedText
+from django.conf import settings
+import os
 
 class TextProcessForm(forms.ModelForm):
     class Meta:
@@ -57,3 +59,24 @@ class CategoryAdjustmentForm(forms.Form):
                 }),
                 label='→ 統合先のカテゴリー'
             ) 
+
+class AudioUploadForm(forms.Form):
+    audio_file = forms.FileField(
+        label='音声ファイル',
+        help_text='対応形式: MP3, M4A, WAV, AAC (最大25MB)',
+        required=True
+    )
+
+    def clean_audio_file(self):
+        audio_file = self.cleaned_data.get('audio_file')
+        if audio_file:
+            # ファイルサイズチェック
+            if audio_file.size > settings.FILE_UPLOAD_MAX_MEMORY_SIZE:
+                raise forms.ValidationError('ファイルサイズは25MB以下にしてください。')
+            
+            # 拡張子チェック
+            ext = os.path.splitext(audio_file.name)[1].lower()
+            if ext not in settings.ALLOWED_AUDIO_EXTENSIONS:
+                raise forms.ValidationError('対応していないファイル形式です。')
+            
+        return audio_file 

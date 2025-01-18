@@ -21,6 +21,7 @@ import traceback
 from django.http import JsonResponse
 from datetime import datetime
 import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,103 @@ class TextProcessView(CreateView):
             print(f"\nGeneral Error: {str(e)}")
             form.add_error(None, f'エラーが発生しました：{str(e)}')
             return self.form_invalid(form)
+    
+    def process_audio(self, audio_file):
+        """音声ファイルを文字起こし"""
+        try:
+            print(f"\n=== Audio Processing Debug ===")
+            print(f"Audio file name: {audio_file.name}")
+            print(f"Audio file size: {audio_file.size} bytes")
+
+            # 一時ファイルとして音声を保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(audio_file.name)[1]) as temp_file:
+                for chunk in audio_file.chunks():
+                    temp_file.write(chunk)
+                temp_path = temp_file.name
+
+            try:
+                # Whisper APIで文字起こし
+                client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                with open(temp_path, 'rb') as audio:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio,
+                        language="ja"
+                    )
+                
+                # 文字起こし結果をテキストファイルとして保存
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                base_filename = os.path.splitext(audio_file.name)[0]
+                text_filename = f"{base_filename}_{timestamp}.txt"
+                text_filepath = os.path.join('temp', 'transcripts', text_filename)
+                
+                # transcriptsディレクトリが存在しない場合は作成
+                os.makedirs(os.path.join('temp', 'transcripts'), exist_ok=True)
+                
+                # テキストファイルに保存（UTF-8で保存）
+                with open(text_filepath, 'w', encoding='utf-8') as f:
+                    f.write(f"# 音声ファイル: {audio_file.name}\n")
+                    f.write(f"# 文字起こし日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"# ファイルサイズ: {audio_file.size} bytes\n")
+                    f.write("\n")  # 空行を挿入
+                    f.write(transcript.text)
+                
+                print(f"文字起こし結果を保存しました: {text_filepath}")
+                print(f"Transcription result: {transcript.text[:100]}...")  # 最初の100文字を表示
+                
+                return transcript.text, None
+
+            finally:
+                # 音声の一時ファイルを削除
+                os.unlink(temp_path)
+
+        except Exception as e:
+            print(f"Audio processing error: {str(e)}")
+            return None, str(e)
+    
+    def post(self, request, *args, **kwargs):
+        """POSTリクエストの処理"""
+        print("\n=== POST Request Debug ===")
+        
+        # 音声ファイルのチェック
+        audio_file = request.FILES.get('audio_file')
+        if audio_file:
+            print(f"Processing audio file: {audio_file.name}")
+            text, error = self.process_audio(audio_file)
+            print(f"Transcription result - Text: {text}, Error: {error}")
+            
+            if error:
+                messages.error(request, f'音声処理エラー: {error}')
+                return self.render_to_response(self.get_context_data(form=self.get_form()))
+            
+            if text:
+                # 文字起こし結果を直接GPT-4処理に渡す
+                try:
+                    current_categories = self.get_current_categories()
+                    gpt_response = self.process_with_gpt4(text, current_categories)
+                    
+                    # セッションデータの保存
+                    session_data = {
+                        'input_text': text,
+                        'existing_data': json.loads(gpt_response['content'])['existing_data'],
+                        'new_categories': json.loads(gpt_response['content']).get('new_categories', {}),
+                        'tokens_info': self.calculate_cost(gpt_response['usage'])
+                    }
+                    
+                    self.request.session['temp_form_data'] = session_data
+                    self.request.session.modified = True
+                    
+                    return redirect('confirm-name')
+                    
+                except Exception as e:
+                    print(f"Error processing text: {str(e)}")
+                    messages.error(request, 'テキスト処理中にエラーが発生しました。')
+                    form = self.get_form()
+                    form.initial = {'input_text': text}  # エラー時にテキストを保持
+                    return self.render_to_response(self.get_context_data(form=form))
+        
+        # 通常のフォーム処理
+        return super().post(request, *args, **kwargs)
 
 class CategoryAdjustView(FormView):
     template_name = 'textmap/adjust_categories.html'
