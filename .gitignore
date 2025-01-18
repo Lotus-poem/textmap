@@ -18,3 +18,5 @@ output/
 temp/
 temp/*
 *.csv
+
+pdfmaker/pass_info.py
