@@ -19,4 +19,4 @@ temp/
 temp/*
 *.csv
 
-pdfmaker/pass_info.py
+pass_info.py
