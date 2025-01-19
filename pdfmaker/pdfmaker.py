@@ -1,9 +1,9 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.firefox import GeckoDriverManager
+from webdriver_manager.chrome import ChromeDriverManager
 from datetime import datetime
 import aconfig
 import logging
@@ -59,16 +59,14 @@ class WebScraper:
                 pdfmetrics.registerFont(TTFont('CustomFont', font_path))
 
     def setup_driver(self):
-        firefox_options = webdriver.FirefoxOptions()
-        firefox_options.accept_insecure_certs = True
-        firefox_options.add_argument('--no-sandbox')
-        firefox_options.add_argument('--disable-dev-shm-usage')
-        firefox_options.add_argument('--headless')
+        chrome_options = webdriver.ChromeOptions()
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--headless')
         
-        # geckodriverの場所を直接指定
-        geckodriver_path = r"C:\Users\worth\.wdm\drivers\geckodriver\win64\v0.35.0\geckodriver.exe"
-        service = FirefoxService(geckodriver_path)
-        return webdriver.Firefox(service=service, options=firefox_options)
+        # chromedriverを自動でダウンロード
+        service = ChromeService(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=chrome_options)
 
     @contextmanager
     def browser_session(self):
@@ -132,6 +130,8 @@ class WebScraper:
                 title = driver.find_element(
                     By.XPATH, "//h2[contains(@class, 'heading__title')]"
                 ).text
+                # "※媒体掲載NG" という文言を削除
+                title = title.replace("※媒体掲載NG", "").strip()
                 subinfo_left = driver.find_element(
                     By.XPATH, "//div[contains(@class, 'subinfoLeft')]"
                 ).text
