@@ -29,6 +29,7 @@ from reportlab.lib.utils import ImageReader
 import os
 import argparse
 import sys
+from selenium.common.exceptions import NoSuchElementException
 
 # ロギングの設定
 logging.basicConfig(
@@ -42,6 +43,7 @@ class WebScraper:
         self.url = url
         self.driver = None
         self.job_data = {}
+        self.site_type = self._determine_site_type(url)
         
         # 日本語フォントの設定（MS Gothic を使用する場合）
         try:
@@ -57,6 +59,15 @@ class WebScraper:
                 # Mac の場合、Hiragino を使用
                 font_path = "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
                 pdfmetrics.registerFont(TTFont('CustomFont', font_path))
+
+    def _determine_site_type(self, url):
+        """URLからサイトタイプを判定"""
+        if "agent-navigation.jp" in url:
+            return "agent_navi"
+        elif "jobsearch.w3hr.jp" in url:
+            return "w3hr"
+        else:
+            raise ValueError("未対応のサイトです")
 
     def setup_driver(self):
         chrome_options = webdriver.ChromeOptions()
@@ -115,7 +126,14 @@ class WebScraper:
             logger.error(f"ページ解析中にエラーが発生しました: {e}")
 
     def extract_job_info(self, driver):
-        """求人情報を抽出する"""
+        """サイトタイプに応じて適切な抽出関数を呼び出す"""
+        if self.site_type == "agent_navi":
+            return self._extract_agent_navi(driver)
+        elif self.site_type == "w3hr":
+            return self._extract_w3hr(driver)
+
+    def _extract_agent_navi(self, driver):
+        """agent-navigation用の抽出処理"""
         try:
             # ページの読み込みを待機
             WebDriverWait(driver, 10).until(
@@ -161,33 +179,109 @@ class WebScraper:
                     logger.warning(f"項目「{label}」の取得に失敗: {e}")
                     continue
 
-            logger.info("求人情報の抽出が完了しました")
+            # URLも保存（サイトタイプの判定用）
+            self.job_data['url'] = driver.current_url
+
+            logger.info("agent-navi求人情報の抽出が完了しました")
             logger.info(f"取得した項目: {list(self.job_data.keys())}")
             return True
 
         except Exception as e:
-            logger.error(f"求人情報の抽出中にエラーが発生しました: {e}")
+            logger.error(f"agent-navi求人情報の抽出中にエラーが発生しました: {e}")
+            return False
+
+    def _extract_w3hr(self, driver):
+        """W3HR用の抽出処理"""
+        try:
+            # ページの読み込みを待機
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "table.text-gray-500"))
+            )
+
+            # 基本情報の取得
+            try:
+                company_row = driver.find_element(
+                    By.XPATH, "//tr[.//th[contains(text(), '企業名')]]"
+                )
+                position_row = driver.find_element(
+                    By.XPATH, "//tr[.//th[contains(text(), 'ポジション')]]"
+                )
+
+                self.job_data["企業名"] = company_row.find_element(By.TAG_NAME, "td").text.strip()
+                self.job_data["ポジション"] = position_row.find_element(By.TAG_NAME, "td").text.strip()
+
+            except Exception as e:
+                logger.warning(f"基本情報の取得に失敗: {e}")
+
+            # 詳細情報の取得
+            rows = driver.find_elements(By.CSS_SELECTOR, "table.text-gray-500 tr")
+            for row in rows:
+                try:
+                    header = row.find_element(By.TAG_NAME, "th").text.strip()
+                    try:
+                        value = row.find_element(By.TAG_NAME, "pre").text.strip()
+                    except NoSuchElementException:
+                        value = row.find_element(By.TAG_NAME, "td").text.strip()
+                    
+                    if header and value:
+                        self.job_data[header] = value
+                        logger.info(f"項目「{header}」: {value[:30]}...")  # 最初の30文字だけログ出力
+                except Exception as e:
+                    logger.warning(f"項目の取得に失敗: {e}")
+                    continue
+
+            # URLも保存（サイトタイプの判定用）
+            self.job_data['url'] = driver.current_url
+
+            logger.info("W3HR求人情報の抽出が完了しました")
+            logger.info(f"取得した項目: {list(self.job_data.keys())}")
+            return True
+
+        except Exception as e:
+            logger.error(f"W3HR求人情報の抽出中にエラーが発生: {e}")
             return False
 
     def run(self):
         with self.browser_session() as driver:
             try:
-                logger.info("ログインページにアクセスしています...")
-                driver.get(self.url)
-                aconfig.login(driver)
-                
-                wait = WebDriverWait(driver, 20)
-                wait.until(lambda driver: driver.current_url != self.url)
-                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                time.sleep(7)
+                # サイトタイプに応じた処理
+                if self.site_type == "agent_navi":
+                    # agent-navigation用の処理
+                    logger.info("agent-navigationにアクセスしています...")
+                    driver.get(self.url)  # まず求人ページにアクセス
+                    aconfig.login_agent_navi(driver)  # その後ログイン
+                    
+                elif self.site_type == "w3hr":
+                    # W3HR用の処理
+                    logger.info("W3HRにアクセスしています...")
+                    aconfig.login_w3hr(driver)  # まずログイン
+                    driver.get(self.url)  # その後求人ページにアクセス
+                    time.sleep(3)
                 
                 if self.extract_job_info(driver):
-                    return self.job_data  # job_dataを返す（PDF生成は行わない）
+                    return self.job_data
                 return None
                 
             except Exception as e:
                 logger.error(f"処理中にエラーが発生しました: {e}")
                 return None
+
+    def generate_pdf(self, job_data_list):
+        """サイトタイプに応じて適切なPDF生成関数を呼び出す"""
+        if self.site_type == "agent_navi":
+            return self._generate_agent_navi_pdf(job_data_list)
+        elif self.site_type == "w3hr":
+            return self._generate_w3hr_pdf(job_data_list)
+
+    def _generate_agent_navi_pdf(self, job_data_list):
+        """agent-navigation用のPDF生成処理"""
+        # 既存のPDF生成ロジック
+        pass
+
+    def _generate_w3hr_pdf(self, job_data_list):
+        """W3HR用のPDF生成処理"""
+        # W3HR専用のPDF生成ロジック
+        pass
 
 class NumberedCanvas(Canvas):
     """全ページにロゴを描画するためのカスタムキャンバス"""
@@ -239,6 +333,11 @@ def get_urls_interactively():
     print("URLを1行ずつ入力してください。")
     print("入力を終了する場合は、空行のまま Enter を押してください。")
     
+    valid_domains = [
+        'https://agent-navigation.jp/job/',
+        'https://jobsearch.w3hr.jp/detail/'
+    ]
+    
     while True:
         url = input("\n求人情報のURL（終了は空行）: ").strip()
         if not url:
@@ -247,10 +346,12 @@ def get_urls_interactively():
                 continue
             break
         
-        if url.startswith('https://agent-navigation.jp/job/'):
+        if any(url.startswith(domain) for domain in valid_domains):
             urls.append(url)
         else:
-            print("無効なURLです。'https://agent-navigation.jp/job/' で始まるURLを入力してください。")
+            print(f"無効なURLです。以下のいずれかで始まるURLを入力してください：")
+            for domain in valid_domains:
+                print(f"- {domain}")
     
     return urls
 
@@ -334,42 +435,71 @@ def generate_combined_pdf(all_job_data):
 
         elements = []
         
+        # サイトタイプごとの表示順序を定義
+        agent_navi_order = [
+            '職務内容', '雇用形態', '業種', '職種', '勤務地', 
+            '就業時間', '社会保険', '制度・福利厚生', '試用期間',
+            '休日', '給与', '手当', '必要なスキル・経験',
+            '年齢', '学歴', '選考'
+        ]
+        
+        w3hr_order = [
+            '特徴',
+            '業務内容',
+            '職種',
+            '応募資格(詳細)',
+            '給与(詳細)',
+            '勤務地',
+            '勤務地(詳細)',
+            'リモートワークの可否',
+            '待遇・福利厚生',
+            '休日休暇',
+            '雇用形態',
+            '雇用形態(詳細)',
+            '選考プロセス',
+            '年収'
+        ]
+        
         # 各求人情報をPDFに追加
         for i, job_data in enumerate(all_job_data):
             if i > 0:
                 elements.append(PageBreak())
             
-            # 会社名を追加（CompanyTitleスタイルを使用）
-            if '会社情報' in job_data:
-                elements.append(Paragraph(
-                    job_data['会社情報'],
-                    styles['CompanyTitle']  # 新しいスタイルを適用
-                ))
+            # サイトタイプの判定（URLから）
+            site_type = "w3hr" if "jobsearch.w3hr.jp" in job_data.get('url', '') else "agent_navi"
+            display_order = w3hr_order if site_type == "w3hr" else agent_navi_order
             
-            # 職種名を追加（PositionTitleスタイルを使用）
-            if '職種名' in job_data:
-                elements.append(Paragraph(
-                    job_data['職種名'],
-                    styles['PositionTitle']  # 新しいスタイルを適用
-                ))
+            # タイトル部分の追加
+            if site_type == "w3hr":
+                if '企業名' in job_data:
+                    elements.append(Paragraph(
+                        job_data['企業名'],
+                        styles['CompanyTitle']
+                    ))
+                if 'ポジション' in job_data:
+                    elements.append(Paragraph(
+                        job_data['ポジション'],
+                        styles['PositionTitle']
+                    ))
+            else:
+                if '会社情報' in job_data:
+                    elements.append(Paragraph(
+                        job_data['会社情報'],
+                        styles['CompanyTitle']
+                    ))
+                if '職種名' in job_data:
+                    elements.append(Paragraph(
+                        job_data['職種名'],
+                        styles['PositionTitle']
+                    ))
 
-            # その他の情報を追加
-            display_order = [
-                '職務内容', '雇用形態', '業種', '職種', '勤務地', 
-                '就業時間', '社会保険', '制度・福利厚生', '試用期間',
-                '休日', '給与', '手当', '必要なスキル・経験',
-                '年齢', '学歴', '選考'
-            ]
-
+            # 詳細情報の追加
             for key in display_order:
                 if key in job_data and job_data[key]:
-                    # 見出し（背景色付き）
                     elements.append(Paragraph(
                         f"■{key}",
                         styles['CustomHeading']
                     ))
-                    
-                    # 改行を保持して本文を表示
                     content = str(job_data[key]).replace('\n', '<br/>')
                     elements.append(Paragraph(
                         content,
@@ -437,13 +567,18 @@ def main():
     
     args = parser.parse_args()
     
+    valid_domains = [
+        'https://agent-navigation.jp/job/',
+        'https://jobsearch.w3hr.jp/detail/'
+    ]
+    
     # URLの取得
     if args.interactive or not args.urls:
         # 対話モードが指定されているか、URLが指定されていない場合
         urls = get_urls_interactively()
     else:
         # コマンドライン引数からURLを取得
-        urls = [url for url in args.urls if url.startswith('https://agent-navigation.jp/job/')]
+        urls = [url for url in args.urls if any(url.startswith(domain) for domain in valid_domains)]
         if not urls:
             print("有効なURLが指定されていません。")
             sys.exit(1)
