@@ -442,7 +442,6 @@ def generate_combined_pdf(all_job_data):
         ]
         
         w3hr_order = [
-            '特徴',
             '業務内容',
             '職種',
             '応募資格(詳細)',
