@@ -225,9 +225,7 @@ class WebScraper:
                     
                     if header and value:
                         self.job_data[header] = value
-                        logger.info(f"項目「{header}」: {value[:30]}...")  # 最初の30文字だけログ出力
                 except Exception as e:
-                    logger.warning(f"項目の取得に失敗: {e}")
                     continue
 
             # URLも保存（サイトタイプの判定用）
@@ -525,16 +523,34 @@ def generate_combined_pdf(all_job_data):
         raise
 
 def process_urls(urls):
-    """複数のURLを処理する"""
+    """URLのリストを処理し、PDFを生成する"""
     all_job_data = []
-    total = len(urls)
     
-    for i, url in enumerate(urls, 1):
+    for url in urls:
         try:
-            print(f"\n処理中 ({i}/{total}): {url}")
             scraper = WebScraper(url)
             job_data = scraper.run()
+            
             if job_data:
+                # 職種名/ポジションの確認と編集
+                if 'ポジション' in job_data:
+                    current_title = job_data['ポジション']
+                    print(f"\n現在のポジション名: {current_title}")
+                    edit = input("ポジション名を変更しますか？ (y/n): ").lower().strip()
+                    if edit == 'y':
+                        new_title = input("新しいポジション名を入力してください: ").strip()
+                        job_data['ポジション'] = new_title
+                        print(f"ポジション名を「{new_title}」に変更しました")
+                
+                elif '職種名' in job_data:
+                    current_title = job_data['職種名']
+                    print(f"\n現在の職種名: {current_title}")
+                    edit = input("職種名を変更しますか？ (y/n): ").lower().strip()
+                    if edit == 'y':
+                        new_title = input("新しい職種名を入力してください: ").strip()
+                        job_data['職種名'] = new_title
+                        print(f"職種名を「{new_title}」に変更しました")
+                
                 all_job_data.append(job_data)
                 print(f"情報取得完了: {url}")
             else:
